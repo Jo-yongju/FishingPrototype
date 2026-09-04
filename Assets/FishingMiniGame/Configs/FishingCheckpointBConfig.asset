@@ -12,6 +12,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ed6c2f67138aad648b4f5921fbabba4f, type: 3}
   m_Name: FishingCheckpointBConfig
   m_EditorClassIdentifier: FishingMiniGame.Runtime::FishingMiniGame.Runtime.FishingGameConfigAsset
+  gameMode: 1
+  sessionFishId: red_sea_bream
   roundDurationSeconds: 180
   countdownSeconds: 3
   cycleFishInCatalogOrder: 0

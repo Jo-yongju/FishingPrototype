@@ -20,6 +20,7 @@ namespace FishingMiniGame.Tests
 
             FishingGameController controller = UnityEngine.Object.FindAnyObjectByType<FishingGameController>();
             Assert.That(controller, Is.Not.Null, "FishingStandalone must contain a FishingGameController.");
+            controller.ConfigureFlowMode(FishingGameMode.LegacyRound);
             Assert.That(controller.RoundSnapshot.State, Is.EqualTo(FishingRoundState.Ready),
                 "The standalone scene must open on its start screen instead of beginning immediately.");
             Canvas canvas = UnityEngine.Object.FindAnyObjectByType<Canvas>();
@@ -74,6 +75,7 @@ namespace FishingMiniGame.Tests
             FishingMiniGameFacade facade = UnityEngine.Object.FindAnyObjectByType<FishingMiniGameFacade>();
             Assert.That(controller, Is.Not.Null);
             Assert.That(facade, Is.Not.Null);
+            facade.ConfigureFlowMode(FishingGameMode.LegacyRound);
 
             int completionCount = 0;
             FishingRoundResult completedResult = null;

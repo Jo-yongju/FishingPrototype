@@ -109,6 +109,10 @@ namespace FishingMiniGame.Runtime
     [CreateAssetMenu(fileName = "FishingCheckpointBConfig", menuName = "Fishing Mini Game/Checkpoint B Config")]
     public sealed class FishingGameConfigAsset : ScriptableObject
     {
+        [Header("Game mode")]
+        [SerializeField] private FishingGameMode gameMode = FishingGameMode.LegacyRound;
+        [SerializeField] private string sessionFishId = "red_sea_bream";
+
         [Header("Round")]
         [SerializeField, Min(0.1f)] private float roundDurationSeconds = 180f;
         [SerializeField, Min(0f)] private float countdownSeconds = 3f;
@@ -139,6 +143,8 @@ namespace FishingMiniGame.Runtime
         [SerializeField] private List<FishingFishConfig> fishCatalog = new List<FishingFishConfig>();
 
         public int RandomSeed => randomSeed;
+        public FishingGameMode GameMode => gameMode;
+        public string SessionFishId => sessionFishId;
         public float RoundDurationSeconds => roundDurationSeconds;
         public float CountdownSeconds => countdownSeconds;
         public bool CycleFishInCatalogOrder => cycleFishInCatalogOrder;
@@ -180,6 +186,20 @@ namespace FishingMiniGame.Runtime
         public FishProfile BuildFishProfile()
         {
             return BuildFishProfiles()[0];
+        }
+
+        public FishProfile BuildSessionFishProfile()
+        {
+            FishProfile[] profiles = BuildFishProfiles();
+            for (int i = 0; i < profiles.Length; i++)
+            {
+                if (string.Equals(profiles[i].FishId, sessionFishId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return profiles[i];
+                }
+            }
+
+            return profiles[0];
         }
 
         public FishingLaunchContext BuildLaunchContext(string roundId = "standalone-round")

@@ -29,6 +29,7 @@ namespace FishingMiniGame.Runtime
         private GameObject _debugPanel;
         private GameObject _centerAlertPanel;
         private RawImage _startBackdrop;
+        private Text _timerLabelText;
         private Text _timerText;
         private Text _scoreText;
         private Text _catchText;
@@ -41,8 +42,10 @@ namespace FishingMiniGame.Runtime
         private Text _centerAlertText;
         private Text _countdownText;
         private Text _resultTitleText;
+        private Text _resultScoreLabelText;
         private Text _resultScoreText;
         private Text _resultDetailText;
+        private Text _resultFootnoteText;
         private Text _recentCatchText;
         private Text _debugText;
         private BarWidgets _castBar;
@@ -80,7 +83,8 @@ namespace FishingMiniGame.Runtime
         private void Update()
         {
             if (!_built || _canvasRoot == null) BuildCanvas();
-            if (controller == null || controller.Snapshot == null || controller.RoundSnapshot == null)
+            if (controller == null || controller.Snapshot == null || controller.RoundSnapshot == null ||
+                controller.SessionSnapshot == null)
             {
                 if (_canvasRoot != null) _canvasRoot.SetActive(false);
                 return;
@@ -88,16 +92,28 @@ namespace FishingMiniGame.Runtime
 
             _canvasRoot.SetActive(true);
             if (Input.GetKeyDown(KeyCode.F3)) _debugVisible = !_debugVisible;
-            Refresh(controller.Snapshot, controller.RoundSnapshot);
+            Refresh(controller.Snapshot, controller.RoundSnapshot, controller.SessionSnapshot);
             if (_startPanel != null && _startPanel.activeSelf) UpdateStartBackdropCrop();
         }
 
-        private void Refresh(FishingSnapshot snapshot, FishingRoundSnapshot round)
+        private void Refresh(
+            FishingSnapshot snapshot,
+            FishingRoundSnapshot round,
+            FishingSessionSnapshot session)
         {
-            bool ready = round.State == FishingRoundState.Ready;
-            bool countdown = round.State == FishingRoundState.Countdown;
-            bool finished = round.State == FishingRoundState.Completed || round.State == FishingRoundState.Aborted;
-            bool playing = round.State == FishingRoundState.Playing;
+            bool singleSession = controller.Mode == FishingGameMode.SingleFishSession;
+            bool ready = singleSession
+                ? session.State == FishingSessionState.Ready
+                : round.State == FishingRoundState.Ready;
+            bool countdown = singleSession
+                ? session.State == FishingSessionState.Countdown
+                : round.State == FishingRoundState.Countdown;
+            bool finished = singleSession
+                ? session.State == FishingSessionState.Completed || session.State == FishingSessionState.Aborted
+                : round.State == FishingRoundState.Completed || round.State == FishingRoundState.Aborted;
+            bool playing = singleSession
+                ? session.State == FishingSessionState.Playing
+                : round.State == FishingRoundState.Playing;
 
             _startPanel.SetActive(ready);
             _countdownPanel.SetActive(countdown);
@@ -111,8 +127,10 @@ namespace FishingMiniGame.Runtime
                 if (readyHint != null)
                 {
                     readyHint.text = allowLocalStart
-                        ? "A three-minute coastal fishing challenge"
-                        : "Waiting for the host project to begin the round";
+                        ? (singleSession
+                            ? $"Land one {session.FishDisplayName} to complete the session"
+                            : "A three-minute coastal fishing challenge")
+                        : "Waiting for the host project to begin fishing";
                 }
                 Button button = _startPanel.transform.Find("StartCard/StartButton")?.GetComponent<Button>();
                 if (button != null) button.gameObject.SetActive(allowLocalStart);
@@ -120,21 +138,28 @@ namespace FishingMiniGame.Runtime
 
             if (countdown)
             {
-                _countdownText.text = Mathf.Max(1, Mathf.CeilToInt(round.CountdownRemainingSeconds)).ToString();
+                float countdownRemaining = singleSession
+                    ? session.CountdownRemainingSeconds
+                    : round.CountdownRemainingSeconds;
+                _countdownText.text = Mathf.Max(1, Mathf.CeilToInt(countdownRemaining)).ToString();
                 return;
             }
 
             if (finished)
             {
-                RefreshResult(round);
+                if (singleSession) RefreshSessionResult(session);
+                else RefreshResult(round);
                 return;
             }
 
             if (!playing) return;
 
-            _timerText.text = FormatTime(round.RemainingSeconds);
-            _scoreText.text = round.TotalScore.ToString("N0");
-            _catchText.text = $"{round.CaughtCount} CAUGHT  /  {round.Attempts} ATTEMPTS";
+            _timerLabelText.text = singleSession ? "SESSION TIME" : "TIME LEFT";
+            _timerText.text = FormatTime(singleSession ? session.ElapsedSeconds : round.RemainingSeconds);
+            _scoreText.text = (singleSession ? snapshot.TotalScore : round.TotalScore).ToString("N0");
+            _catchText.text = singleSession
+                ? $"ONE FISH SESSION  /  {session.PreHookFailureCount} RETRIES"
+                : $"{round.CaughtCount} CAUGHT  /  {round.Attempts} ATTEMPTS";
             _fishText.text = string.IsNullOrWhiteSpace(snapshot.FishDisplayName) ? "UNKNOWN FISH" : snapshot.FishDisplayName.ToUpperInvariant();
             _difficultyText.text = string.IsNullOrWhiteSpace(snapshot.DifficultyLabel) ? "NORMAL" : snapshot.DifficultyLabel.ToUpperInvariant();
             _difficultyText.color = DifficultyColor(snapshot.DifficultyLabel);
@@ -150,8 +175,8 @@ namespace FishingMiniGame.Runtime
 
             UpdateGuidance(snapshot);
             UpdateAlert(snapshot);
-            UpdateRecentCatch();
-            UpdateDebug(snapshot, round);
+            UpdateRecentCatch(singleSession, session);
+            UpdateDebug(snapshot, round, session);
         }
 
         private void UpdateGuidance(FishingSnapshot snapshot)
@@ -256,8 +281,16 @@ namespace FishingMiniGame.Runtime
             _alertUntil = Time.unscaledTime + seconds;
         }
 
-        private void UpdateRecentCatch()
+        private void UpdateRecentCatch(bool singleSession, FishingSessionSnapshot session)
         {
+            if (singleSession)
+            {
+                _recentCatchText.text = session.PreHookFailureCount == 0
+                    ? "ONE TARGET  •  LAND IT TO COMPLETE THE SESSION"
+                    : $"SAME TARGET  •  RETRY {session.PreHookFailureCount + 1}";
+                return;
+            }
+
             if (controller.CatchHistory == null || controller.CatchHistory.Count == 0)
             {
                 _recentCatchText.text = "No catches yet — your first one is waiting";
@@ -268,12 +301,18 @@ namespace FishingMiniGame.Runtime
             _recentCatchText.text = $"LAST CATCH   {latest.FishDisplayName.ToUpperInvariant()}   +{latest.Score}";
         }
 
-        private void UpdateDebug(FishingSnapshot snapshot, FishingRoundSnapshot round)
+        private void UpdateDebug(
+            FishingSnapshot snapshot,
+            FishingRoundSnapshot round,
+            FishingSessionSnapshot session)
         {
             FishingFeedbackFrame feedback = controller.LastFeedback;
+            string flow = controller.Mode == FishingGameMode.SingleFishSession
+                ? $"Session     {session.State} / retry {session.PreHookFailureCount}"
+                : $"Round       {round.State}";
             _debugText.text =
                 "DEVELOPER OVERLAY  [F3]\n" +
-                $"Round       {round.State}\n" +
+                flow + "\n" +
                 $"Player      {snapshot.State}\n" +
                 $"Fish ID     {snapshot.FishId}\n" +
                 $"State time  {snapshot.StateElapsedSeconds:0.00}s\n" +
@@ -302,6 +341,36 @@ namespace FishingMiniGame.Runtime
             _resultTitleText.text = result.EndReason == FishingRoundEndReason.TimeExpired ? "TIME'S UP!" : "ROUND COMPLETE";
             _resultScoreText.text = result.TotalScore.ToString("N0");
             _resultDetailText.text = $"{result.CaughtCount} FISH CAUGHT   •   {result.Attempts} ATTEMPTS\n{BuildCatchSummary(result)}";
+            _resultScoreLabelText.text = "FINAL SCORE";
+            _resultFootnoteText.text = "Each new round reshuffles species and fight behavior";
+        }
+
+        private void RefreshSessionResult(FishingSessionSnapshot session)
+        {
+            FishingSessionResult result = controller.LastSessionResult;
+            _resultScoreLabelText.text = "CATCH SCORE";
+            _resultFootnoteText.text = "FISH AGAIN starts a fresh single-fish session";
+            if (result == null)
+            {
+                _resultTitleText.text = session.State == FishingSessionState.Aborted
+                    ? "SESSION ABORTED"
+                    : "SESSION COMPLETE";
+                _resultScoreText.text = "0";
+                _resultDetailText.text = session.FishDisplayName;
+                return;
+            }
+
+            bool caught = result.Outcome == FishingSessionOutcome.Caught;
+            _resultTitleText.text = caught ? "FISH CAUGHT!" : "FISH ESCAPED";
+            _resultScoreText.text = (result.CycleResult?.AwardedScore ?? 0).ToString("N0");
+            string retryText = result.PreHookFailureCount == 1
+                ? "1 PRE-HOOK RETRY"
+                : $"{result.PreHookFailureCount} PRE-HOOK RETRIES";
+            string outcome = caught
+                ? "TARGET LANDED"
+                : $"ESCAPED  •  {result.CycleResult?.EscapeReason}";
+            _resultDetailText.text =
+                $"{result.FishDisplayName.ToUpperInvariant()}  •  {outcome}\n{retryText}  •  {FormatTime(result.ElapsedSeconds)}";
         }
 
         private static string BuildCatchSummary(FishingRoundResult result)
@@ -360,7 +429,7 @@ namespace FishingMiniGame.Runtime
             SetRect(subtitle.rectTransform, new Vector2(0f, 0f), new Vector2(0.32f, 1f), new Vector2(0f, 0.5f), new Vector2(30f, -25f), new Vector2(-30f, -68f));
 
             RectTransform timerCard = CreatePanel("TimerCard", header, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(230f, 76f), SoftPanel);
-            CreateCenteredText("TimerLabel", timerCard, "TIME LEFT", 13, FontStyle.Bold, TextSecondary, TextAnchor.MiddleCenter, new Vector2(0f, 22f), new Vector2(210f, 22f));
+            _timerLabelText = CreateCenteredText("TimerLabel", timerCard, "TIME LEFT", 13, FontStyle.Bold, TextSecondary, TextAnchor.MiddleCenter, new Vector2(0f, 22f), new Vector2(210f, 22f));
             _timerText = CreateCenteredText("Timer", timerCard, "03:00", 34, FontStyle.Bold, TextPrimary, TextAnchor.MiddleCenter, new Vector2(0f, -10f), new Vector2(210f, 44f));
 
             RectTransform scoreArea = CreateRect("ScoreArea", header, new Vector2(0.68f, 0f), Vector2.one, new Vector2(1f, 0.5f), new Vector2(-24f, 0f), new Vector2(-24f, 0f));
@@ -473,7 +542,7 @@ namespace FishingMiniGame.Runtime
             RectTransform card = CreatePanel("ResultCard", _resultPanel.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(760f, 520f), DeepNavy);
             AddOutline(card.gameObject, new Color(Gold.r, Gold.g, Gold.b, 0.6f));
             _resultTitleText = CreateCenteredText("ResultTitle", card, "TIME'S UP!", 40, FontStyle.Bold, TextPrimary, TextAnchor.MiddleCenter, new Vector2(0f, 188f), new Vector2(680f, 60f));
-            CreateCenteredText("ScoreLabel", card, "FINAL SCORE", 15, FontStyle.Bold, TextSecondary, TextAnchor.MiddleCenter, new Vector2(0f, 118f), new Vector2(680f, 30f));
+            _resultScoreLabelText = CreateCenteredText("ScoreLabel", card, "FINAL SCORE", 15, FontStyle.Bold, TextSecondary, TextAnchor.MiddleCenter, new Vector2(0f, 118f), new Vector2(680f, 30f));
             _resultScoreText = CreateCenteredText("ResultScore", card, "0", 72, FontStyle.Bold, Gold, TextAnchor.MiddleCenter, new Vector2(0f, 54f), new Vector2(680f, 90f));
             _resultDetailText = CreateCenteredText("ResultDetail", card, "0 FISH CAUGHT", 18, FontStyle.Normal, TextPrimary, TextAnchor.MiddleCenter, new Vector2(0f, -55f), new Vector2(650f, 100f));
             Button restartButton = CreateButton("RestartButton", card, "FISH AGAIN", new Vector2(0f, -168f), new Vector2(330f, 62f), Aqua);
@@ -481,7 +550,7 @@ namespace FishingMiniGame.Runtime
             {
                 StartLocalRound();
             });
-            CreateCenteredText("ResultFootnote", card, "Each new round reshuffles species and fight behavior", 13, FontStyle.Normal, TextSecondary, TextAnchor.MiddleCenter, new Vector2(0f, -224f), new Vector2(680f, 28f));
+            _resultFootnoteText = CreateCenteredText("ResultFootnote", card, "Each new round reshuffles species and fight behavior", 13, FontStyle.Normal, TextSecondary, TextAnchor.MiddleCenter, new Vector2(0f, -224f), new Vector2(680f, 28f));
         }
 
         private void StartLocalRound()

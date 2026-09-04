@@ -16,13 +16,18 @@ namespace FishingMiniGame.Runtime
         private IFishingFeedbackOutput _feedbackOutput;
         private LocalFishingAuthority _authority;
         private FishingRoundTracker _roundTracker;
+        private SingleFishSessionTracker _sessionTracker;
         private FishingLaunchContext _launchContext;
         private FishingRules _baseRules;
         private FishProfile[] _fishCatalog;
+        private FishProfile _sessionFishOverride;
         private System.Random _fishRandom;
         private FishingPlayerState _lastLoggedState;
+        private FishingGameMode? _modeOverride;
+        private FishingGameMode _gameMode;
         private int _nextFishIndex;
         private bool _prepareNextFish;
+        private bool _sessionHookCommitted;
         private bool _paused;
         private bool _initialized;
 
@@ -30,14 +35,18 @@ namespace FishingMiniGame.Runtime
         public FishingCycleResult LastResult => _authority?.LastResult;
         public FishingRoundSnapshot RoundSnapshot => _roundTracker?.Current;
         public FishingRoundResult LastRoundResult => _roundTracker?.Result;
+        public FishingSessionSnapshot SessionSnapshot => _sessionTracker?.Current;
+        public FishingSessionResult LastSessionResult => _sessionTracker?.Result;
         public IReadOnlyList<FishingCatchRecord> CatchHistory => _roundTracker?.Catches;
         public FishingFeedbackFrame LastFeedback => _feedbackOutput is MockFishingFeedbackOutput mock
             ? mock.LastFrame
             : Snapshot?.Feedback ?? default;
         public FishingGameConfigAsset Config => config;
+        public FishingGameMode Mode => _gameMode;
         public bool IsPaused => _paused;
         public event Action<FishingCycleResult> CycleFinished;
         public event Action<FishingRoundResult> RoundFinished;
+        public event Action<FishingSessionResult> SessionFinished;
 
         private void Awake()
         {
@@ -60,22 +69,8 @@ namespace FishingMiniGame.Runtime
             if (!HasRuntimeDependencies() || _paused) return;
 
             float deltaTime = Time.unscaledDeltaTime;
-            _roundTracker.Tick(deltaTime);
-            if (_roundTracker.Current.State != FishingRoundState.Playing)
-            {
-                if (_roundTracker.Current.State == FishingRoundState.Completed ||
-                    _roundTracker.Current.State == FishingRoundState.Aborted)
-                {
-                    _feedbackOutput.StopFeedback();
-                }
-                return;
-            }
-
-            FishingInputFrame input = _inputSource.ReadFrame();
-            _authority.Tick(input, deltaTime);
-            _feedbackOutput.ApplyFeedback(_authority.Current.Feedback);
-            PrepareNextFishIfReady();
-            LogStateTransitionIfNeeded();
+            if (_gameMode == FishingGameMode.SingleFishSession) UpdateSingleFishSession(deltaTime);
+            else UpdateLegacyRound(deltaTime);
         }
 
         private void OnDisable()
@@ -87,6 +82,7 @@ namespace FishingMiniGame.Runtime
         {
             if (_authority != null) _authority.CycleFinished -= OnCycleFinished;
             if (_roundTracker != null) _roundTracker.Completed -= OnRoundFinished;
+            if (_sessionTracker != null) _sessionTracker.Completed -= OnSessionFinished;
             _feedbackOutput?.StopFeedback();
         }
 
@@ -96,12 +92,21 @@ namespace FishingMiniGame.Runtime
             autoStartRound = shouldAutoStart;
         }
 
+        public void ConfigureFlowMode(FishingGameMode mode, FishProfile sessionFish = null)
+        {
+            InitializeRuntime();
+            _modeOverride = mode;
+            _sessionFishOverride = sessionFish?.Copy();
+            RebuildRound(_launchContext);
+        }
+
         public void InitializeRuntime()
         {
             if (HasRuntimeDependencies()) return;
 
             if (_authority != null) _authority.CycleFinished -= OnCycleFinished;
             if (_roundTracker != null) _roundTracker.Completed -= OnRoundFinished;
+            if (_sessionTracker != null) _sessionTracker.Completed -= OnSessionFinished;
             _feedbackOutput?.StopFeedback();
 
             _inputSource = new KeyboardFishingInputSource("local-player");
@@ -110,6 +115,8 @@ namespace FishingMiniGame.Runtime
             _authority.CycleFinished += OnCycleFinished;
             _roundTracker = new FishingRoundTracker();
             _roundTracker.Completed += OnRoundFinished;
+            _sessionTracker = new SingleFishSessionTracker();
+            _sessionTracker.Completed += OnSessionFinished;
             _initialized = true;
             RebuildRound(config != null ? config.BuildLaunchContext() : new FishingLaunchContext());
         }
@@ -123,25 +130,39 @@ namespace FishingMiniGame.Runtime
         public void BeginRound()
         {
             InitializeRuntime();
+            _paused = false;
+
+            if (_gameMode == FishingGameMode.SingleFishSession)
+            {
+                if (_sessionTracker.Current.State == FishingSessionState.Completed ||
+                    _sessionTracker.Current.State == FishingSessionState.Aborted)
+                {
+                    RebuildRound(_launchContext);
+                }
+                _sessionTracker.Begin();
+                return;
+            }
+
             if (_roundTracker.Current.State == FishingRoundState.Completed ||
                 _roundTracker.Current.State == FishingRoundState.Aborted)
             {
                 RebuildRound(_launchContext);
             }
-            _paused = false;
             _roundTracker.Begin();
         }
 
         public void StopRound()
         {
             if (!HasRuntimeDependencies()) return;
-            _roundTracker.Stop();
+            if (_gameMode == FishingGameMode.SingleFishSession) _sessionTracker.Abort();
+            else _roundTracker.Stop();
         }
 
         public void AbortRound()
         {
             if (!HasRuntimeDependencies()) return;
-            _roundTracker.Abort();
+            if (_gameMode == FishingGameMode.SingleFishSession) _sessionTracker.Abort();
+            else _roundTracker.Abort();
         }
 
         public void SetPaused(bool paused)
@@ -164,24 +185,93 @@ namespace FishingMiniGame.Runtime
 
         public void ResetCycle()
         {
-            if (_roundTracker?.Current.State != FishingRoundState.Playing) return;
+            if (!IsActivePlayFlow()) return;
             _inputSource?.ResetState();
             _authority?.ResetCycle();
             _feedbackOutput?.StopFeedback();
             _prepareNextFish = false;
+            _sessionHookCommitted = false;
             if (_authority?.Current != null) _lastLoggedState = _authority.Current.State;
+        }
+
+        private void UpdateLegacyRound(float deltaTime)
+        {
+            _roundTracker.Tick(deltaTime);
+            if (_roundTracker.Current.State != FishingRoundState.Playing)
+            {
+                if (_roundTracker.Current.State == FishingRoundState.Completed ||
+                    _roundTracker.Current.State == FishingRoundState.Aborted)
+                {
+                    _feedbackOutput.StopFeedback();
+                }
+                return;
+            }
+
+            TickFishing(deltaTime);
+            PrepareNextFishIfReady();
+        }
+
+        private void UpdateSingleFishSession(float deltaTime)
+        {
+            _sessionTracker.Tick(deltaTime);
+            if (_sessionTracker.Current.State != FishingSessionState.Playing)
+            {
+                if (_sessionTracker.Current.State == FishingSessionState.Completed ||
+                    _sessionTracker.Current.State == FishingSessionState.Aborted)
+                {
+                    _feedbackOutput.StopFeedback();
+                }
+                return;
+            }
+
+            if (_authority.Current.State == FishingPlayerState.Hooked ||
+                _authority.Current.State == FishingPlayerState.Fighting)
+            {
+                _sessionHookCommitted = true;
+            }
+
+            TickFishing(deltaTime);
+
+            if (_authority.Current.State == FishingPlayerState.Hooked ||
+                _authority.Current.State == FishingPlayerState.Fighting)
+            {
+                _sessionHookCommitted = true;
+            }
+            else if (_authority.Current.State == FishingPlayerState.Idle)
+            {
+                _sessionHookCommitted = false;
+            }
+        }
+
+        private void TickFishing(float deltaTime)
+        {
+            FishingInputFrame input = _inputSource.ReadFrame();
+            _authority.Tick(input, deltaTime);
+            _feedbackOutput.ApplyFeedback(_authority.Current.Feedback);
+            LogStateTransitionIfNeeded();
         }
 
         private bool HasRuntimeDependencies()
         {
             return _initialized && _inputSource != null && _feedbackOutput != null &&
-                _authority != null && _roundTracker != null && _fishCatalog != null;
+                _authority != null && _roundTracker != null && _sessionTracker != null &&
+                _fishCatalog != null;
+        }
+
+        private bool IsActivePlayFlow()
+        {
+            if (_gameMode == FishingGameMode.SingleFishSession)
+            {
+                return _sessionTracker?.Current.State == FishingSessionState.Playing;
+            }
+            return _roundTracker?.Current.State == FishingRoundState.Playing;
         }
 
         private void RebuildRound(FishingLaunchContext context)
         {
             _launchContext = (context ?? new FishingLaunchContext()).Copy();
             _launchContext.Sanitize();
+            _gameMode = _modeOverride ?? (config != null ? config.GameMode : FishingGameMode.LegacyRound);
             _baseRules = config != null ? config.BuildRules() : new FishingRules();
             _baseRules.Sanitize();
             _fishCatalog = config != null ? config.BuildFishProfiles() : new[] { new FishProfile() };
@@ -189,9 +279,21 @@ namespace FishingMiniGame.Runtime
             _fishRandom = new System.Random(_launchContext.Seed);
             _nextFishIndex = 0;
             _prepareNextFish = false;
+            _sessionHookCommitted = false;
             _paused = false;
 
-            FishProfile firstFish = SelectNextFish();
+            FishProfile firstFish;
+            if (_gameMode == FishingGameMode.SingleFishSession)
+            {
+                firstFish = _sessionFishOverride?.Copy() ??
+                    (config != null ? config.BuildSessionFishProfile() : _fishCatalog[0].Copy());
+                firstFish.Sanitize();
+            }
+            else
+            {
+                firstFish = SelectNextFish();
+            }
+
             _authority.Initialize(new FishingRoundContext
             {
                 ParticipantId = _launchContext.LocalParticipantId,
@@ -200,6 +302,13 @@ namespace FishingMiniGame.Runtime
                 Fish = firstFish
             });
             _roundTracker.Initialize(_launchContext);
+            _sessionTracker.Initialize(new FishingSessionContext
+            {
+                SessionId = _launchContext.RoundId,
+                ParticipantId = _launchContext.LocalParticipantId,
+                CountdownSeconds = _launchContext.CountdownSeconds,
+                Fish = firstFish
+            });
             _inputSource.ResetState();
             _feedbackOutput.StopFeedback();
             _lastLoggedState = _authority.Current.State;
@@ -235,8 +344,20 @@ namespace FishingMiniGame.Runtime
 
         private void OnCycleFinished(FishingCycleResult result)
         {
-            _roundTracker.RecordCycle(result);
-            _prepareNextFish = true;
+            if (_gameMode == FishingGameMode.SingleFishSession)
+            {
+                bool postHook = result.WasCaught || _sessionHookCommitted ||
+                    _authority.Current.State == FishingPlayerState.Hooked ||
+                    _authority.Current.State == FishingPlayerState.Fighting;
+                if (postHook) _sessionTracker.CompletePostHook(result);
+                else _sessionTracker.RecordPreHookFailure(result);
+            }
+            else
+            {
+                _roundTracker.RecordCycle(result);
+                _prepareNextFish = true;
+            }
+
             CycleFinished?.Invoke(result);
             if (logStateChanges)
             {
@@ -253,6 +374,16 @@ namespace FishingMiniGame.Runtime
             if (logStateChanges)
             {
                 Debug.Log($"[Fishing] Round finished: {result.EndReason}, score {result.TotalScore}, caught {result.CaughtCount}.", this);
+            }
+        }
+
+        private void OnSessionFinished(FishingSessionResult result)
+        {
+            _feedbackOutput?.StopFeedback();
+            SessionFinished?.Invoke(result);
+            if (logStateChanges)
+            {
+                Debug.Log($"[Fishing] Single fish session finished: {result.Outcome}, fish {result.FishId}, retries {result.PreHookFailureCount}.", this);
             }
         }
 
