@@ -1,0 +1,52 @@
+# Unity-generated folders
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Ll]ogs/
+[Bb]uild/
+[Bb]uilds/
+[Uu]ser[Ss]ettings/
+[Mm]emory[Cc]aptures/
+[Rr]ecordings/
+
+# IDE-generated files
+.vs/
+.idea/
+ExportedObj/
+*.csproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Unity crash and build artifacts
+sysinfo.txt
+*.apk
+*.aab
+*.unitypackage
+crashlytics-build.properties
+
+# Local recovery and template-only content excluded from the public baseline
+/Assets/_Recovery/
+/Assets/_Recovery.meta
+/Assets/TutorialInfo/
+/Assets/TutorialInfo.meta
+/Assets/Readme.asset
+/Assets/Readme.asset.meta
+
+# Local handoff/export bundles
+/*_GPT_Handoff.zip
+
