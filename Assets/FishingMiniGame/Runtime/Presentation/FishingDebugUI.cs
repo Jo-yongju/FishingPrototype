@@ -193,7 +193,7 @@ namespace FishingMiniGame.Runtime
                     SetGuidance("WATCH THE FLOAT", "Wait for the bite signal — do not press early");
                     break;
                 case FishingPlayerState.BiteWindow:
-                    SetGuidance("BITE!", "Press SPACE now to set the hook");
+                    SetGuidance("BITE!", "Press F now to set the hook");
                     break;
                 case FishingPlayerState.Hooked:
                     SetGuidance("HOOK SET", "Get ready: hold R to reel and Q / E to control tension");
@@ -220,8 +220,8 @@ namespace FishingMiniGame.Runtime
             if (snapshot.Feedback.State == FishingFeedbackState.Run)
             {
                 return snapshot.FightDirection < 0f
-                    ? "RUN LEFT — hold D to counter, ease R and watch tension"
-                    : "RUN RIGHT — hold A to counter, ease R and watch tension";
+                    ? "RUN LEFT — hold RIGHT ARROW to counter, ease R and watch tension"
+                    : "RUN RIGHT — hold LEFT ARROW to counter, ease R and watch tension";
             }
             if (snapshot.Feedback.State == FishingFeedbackState.Rest) return "REST — reel hard with R while the fish recovers";
             return "STRUGGLE — follow the changing tension and reel when stable";
@@ -232,7 +232,7 @@ namespace FishingMiniGame.Runtime
             if (snapshot.State != _lastState)
             {
                 _lastState = snapshot.State;
-                if (snapshot.State == FishingPlayerState.BiteWindow) ShowAlert("BITE!  PRESS SPACE", Gold, 1.2f);
+                if (snapshot.State == FishingPlayerState.BiteWindow) ShowAlert("BITE!  PRESS F", Gold, 1.2f);
                 else if (snapshot.State == FishingPlayerState.Hooked) ShowAlert("HOOK SET!", Aqua, 0.9f);
                 else if (snapshot.State == FishingPlayerState.Caught) ShowAlert("FISH CAUGHT!", Aqua, 1.5f);
                 else if (snapshot.State == FishingPlayerState.Escaped) ShowAlert("THE FISH ESCAPED", Coral, 1.5f);
@@ -243,7 +243,7 @@ namespace FishingMiniGame.Runtime
                 _lastFeedbackState = snapshot.Feedback.State;
                 if (snapshot.Feedback.State == FishingFeedbackState.Run)
                 {
-                    ShowAlert(snapshot.FightDirection < 0f ? "RUN LEFT  •  HOLD D" : "RUN RIGHT  •  HOLD A", Coral, 0.75f);
+                    ShowAlert(snapshot.FightDirection < 0f ? "RUN LEFT  •  RIGHT ARROW" : "RUN RIGHT  •  LEFT ARROW", Coral, 0.75f);
                 }
                 else if (snapshot.Feedback.State == FishingFeedbackState.Rest)
                 {
@@ -325,6 +325,10 @@ namespace FishingMiniGame.Runtime
                 $"Slack risk  {snapshot.SlackDangerNormalized:0.00}\n" +
                 $"Tight risk  {snapshot.HighTensionDangerNormalized:0.00}\n" +
                 $"Mock output {feedback.State} / {feedback.Intensity:0.00}";
+            FishingInputFrame input = controller.LastInputFrame;
+            _debugText.text +=
+                $"\nRod pose    P {input.RodPitch:+0.00;-0.00;0.00} / Y {input.RodYaw:+0.00;-0.00;0.00}" +
+                $"\nRod motion  {input.MotionStrength:0.00}";
         }
 
         private void RefreshResult(FishingRoundSnapshot round)
@@ -452,7 +456,7 @@ namespace FishingMiniGame.Runtime
             RectTransform controlsCard = CreatePanel("ControlsCard", _gameplayRoot.transform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(28f, 34f), new Vector2(430f, 176f), PanelNavy);
             AddAccent(controlsCard, Gold);
             CreateTextAt("ControlsTitle", controlsCard, "QUICK CONTROLS", 14, FontStyle.Bold, Gold, TextAnchor.UpperLeft, new Vector2(24f, -15f), new Vector2(380f, 24f));
-            CreateTextAt("Controls", controlsCard, "SPACE  Cast / Hook\nR or LMB  Reel\nQ / E  Lower / Raise tension\nA / D  Counter a sideways run", 16, FontStyle.Normal, TextPrimary, TextAnchor.UpperLeft, new Vector2(24f, -47f), new Vector2(380f, 112f));
+            CreateTextAt("Controls", controlsCard, "SPACE  Cast   •   F  Hook   •   R / LMB  Reel\nARROWS  Rod pose   •   T  Recenter\nQ / E  Lower / Raise tension", 16, FontStyle.Normal, TextPrimary, TextAnchor.UpperLeft, new Vector2(24f, -47f), new Vector2(380f, 112f));
 
             RectTransform gaugeCard = CreatePanel("GaugeCard", _gameplayRoot.transform, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-28f, 34f), new Vector2(500f, 326f), PanelNavy);
             AddAccent(gaugeCard, Aqua);
@@ -469,7 +473,7 @@ namespace FishingMiniGame.Runtime
 
             _centerAlertPanel = CreatePanel("CenterAlert", _gameplayRoot.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 110f), new Vector2(690f, 100f), DeepNavy).gameObject;
             AddOutline(_centerAlertPanel, new Color(1f, 0.75f, 0.25f, 0.7f));
-            _centerAlertText = CreateText("Alert", _centerAlertPanel.transform, "BITE!  PRESS SPACE", 36, FontStyle.Bold, Gold, TextAnchor.MiddleCenter);
+            _centerAlertText = CreateText("Alert", _centerAlertPanel.transform, "BITE!  PRESS F", 36, FontStyle.Bold, Gold, TextAnchor.MiddleCenter);
             Stretch(_centerAlertText.rectTransform, 16f);
             _centerAlertPanel.SetActive(false);
 
@@ -499,7 +503,7 @@ namespace FishingMiniGame.Runtime
 
             RectTransform howTo = CreatePanel("HowTo", card, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -50f), new Vector2(650f, 166f), SoftPanel);
             CreateTextAt("HowToTitle", howTo, "HOW TO PLAY", 14, FontStyle.Bold, Aqua, TextAnchor.UpperCenter, new Vector2(0f, -14f), new Vector2(600f, 26f));
-            CreateTextAt("HowToText", howTo, "1   Hold and release SPACE to cast\n2   Ignore small nibbles; hook only on BITE\n3   Use Q / E for tension and A / D against runs\n4   Reel during REST, ease off during RUN", 16, FontStyle.Normal, TextPrimary, TextAnchor.UpperLeft, new Vector2(34f, -46f), new Vector2(582f, 112f));
+            CreateTextAt("HowToText", howTo, "1   Hold and release SPACE to cast\n2   Press F only on BITE to set the hook\n3   Aim the rod with ARROWS; press T to recenter\n4   Use Q / E for tension and R to reel", 16, FontStyle.Normal, TextPrimary, TextAnchor.UpperLeft, new Vector2(34f, -46f), new Vector2(582f, 112f));
 
             Button startButton = CreateButton("StartButton", card, "START FISHING", new Vector2(0f, -202f), new Vector2(360f, 66f), Aqua);
             startButton.onClick.AddListener(() =>
@@ -567,7 +571,7 @@ namespace FishingMiniGame.Runtime
 
         private void BuildDebugPanel()
         {
-            _debugPanel = CreatePanel("DebugPanel", _canvasRoot.transform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(28f, -284f), new Vector2(390f, 370f), new Color(0.01f, 0.025f, 0.035f, 0.94f)).gameObject;
+            _debugPanel = CreatePanel("DebugPanel", _canvasRoot.transform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(28f, -284f), new Vector2(390f, 410f), new Color(0.01f, 0.025f, 0.035f, 0.94f)).gameObject;
             AddOutline(_debugPanel, new Color(1f, 1f, 1f, 0.18f));
             _debugText = CreateText("DebugText", _debugPanel.transform, "DEVELOPER OVERLAY  [F3]", 14, FontStyle.Normal, TextPrimary, TextAnchor.UpperLeft);
             Stretch(_debugText.rectTransform, 20f);

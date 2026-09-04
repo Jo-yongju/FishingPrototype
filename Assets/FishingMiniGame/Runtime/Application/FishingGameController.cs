@@ -37,6 +37,7 @@ namespace FishingMiniGame.Runtime
         public FishingRoundResult LastRoundResult => _roundTracker?.Result;
         public FishingSessionSnapshot SessionSnapshot => _sessionTracker?.Current;
         public FishingSessionResult LastSessionResult => _sessionTracker?.Result;
+        public FishingInputFrame LastInputFrame { get; private set; }
         public IReadOnlyList<FishingCatchRecord> CatchHistory => _roundTracker?.Catches;
         public FishingFeedbackFrame LastFeedback => _feedbackOutput is MockFishingFeedbackOutput mock
             ? mock.LastFrame
@@ -175,6 +176,7 @@ namespace FishingMiniGame.Runtime
         {
             _inputSource = inputSource ?? throw new ArgumentNullException(nameof(inputSource));
             _inputSource.ResetState();
+            LastInputFrame = NeutralInputFrame();
         }
 
         public void SetFeedbackOutput(IFishingFeedbackOutput feedbackOutput)
@@ -245,8 +247,8 @@ namespace FishingMiniGame.Runtime
 
         private void TickFishing(float deltaTime)
         {
-            FishingInputFrame input = _inputSource.ReadFrame();
-            _authority.Tick(input, deltaTime);
+            LastInputFrame = _inputSource.ReadFrame();
+            _authority.Tick(LastInputFrame, deltaTime);
             _feedbackOutput.ApplyFeedback(_authority.Current.Feedback);
             LogStateTransitionIfNeeded();
         }
@@ -310,6 +312,7 @@ namespace FishingMiniGame.Runtime
                 Fish = firstFish
             });
             _inputSource.ResetState();
+            LastInputFrame = NeutralInputFrame();
             _feedbackOutput.StopFeedback();
             _lastLoggedState = _authority.Current.State;
         }
@@ -392,6 +395,16 @@ namespace FishingMiniGame.Runtime
             if (!logStateChanges || _authority.Current.State == _lastLoggedState) return;
             _lastLoggedState = _authority.Current.State;
             Debug.Log($"[Fishing] State -> {_lastLoggedState}", this);
+        }
+
+        private FishingInputFrame NeutralInputFrame()
+        {
+            return new FishingInputFrame
+            {
+                ParticipantId = _launchContext?.LocalParticipantId ?? "local-player",
+                TensionNormalized = 0.5f,
+                IsDeviceConnected = true
+            };
         }
     }
 }

@@ -196,7 +196,7 @@ namespace FishingMiniGame.Core
         private void TickBiteWindow(FishingInputFrame input)
         {
             Current.HookWindowRemainingSeconds = FishingMath.Max(0f, _rules.HookWindowSeconds - _stateElapsed);
-            Current.Hint = "BITE! Press SPACE now";
+            Current.Hint = "BITE! Press F now";
             Current.Feedback = new FishingFeedbackFrame(FishingFeedbackState.Bite, 1f);
             Current.IsNibbling = false;
 

@@ -15,6 +15,9 @@ namespace FishingMiniGame.Runtime
         private readonly List<Transform> _seabirds = new List<Transform>();
         private Transform _worldRoot;
         private Transform _angler;
+        private Transform _rodGripAnchor;
+        private Transform _rodPosePivot;
+        private Transform _rodReactionPivot;
         private Transform _rodTip;
         private Transform _rod;
         private Transform _bobber;
@@ -27,6 +30,7 @@ namespace FishingMiniGame.Runtime
         private GameObject _externalAnglerModel;
         private GameObject _externalFishModel;
         private Renderer[] _fallbackAnglerRenderers;
+        private Renderer[] _externalAnglerRenderers;
         private Renderer[] _fallbackFishRenderers;
         private AnglerVisualAdapter _anglerVisualAdapter;
         private FishVisualAdapter _fishVisualAdapter;
@@ -44,7 +48,10 @@ namespace FishingMiniGame.Runtime
         private Material _fishBellyMaterial;
         private string _lastFishId;
         private float _nextNormalRefresh;
+        private bool _lastRodFocusedMode;
+        private bool _presentationModeInitialized;
         private readonly Vector3 _waterTarget = new Vector3(1.35f, 0.44f, 5.3f);
+        private readonly Vector3 _neutralRodTipOffset = new Vector3(0f, 0.55f, 3.15f);
 
         public void ConfigureVisuals(FishingVisualSet value)
         {
@@ -65,6 +72,7 @@ namespace FishingMiniGame.Runtime
             if (controller == null || controller.Snapshot == null || _bobber == null) return;
 
             FishingSnapshot snapshot = controller.Snapshot;
+            UpdatePresentationMode();
             ApplyFishVisual(snapshot);
             UpdateAnglerAndRod(snapshot);
 
@@ -203,10 +211,12 @@ namespace FishingMiniGame.Runtime
                 cameraObject.tag = "MainCamera";
                 sceneCamera = cameraObject.AddComponent<Camera>();
             }
-            sceneCamera.transform.position = new Vector3(8.8f, 5.1f, -10.4f);
-            sceneCamera.transform.rotation = Quaternion.LookRotation(new Vector3(0.15f, 1.35f, 4.15f) - sceneCamera.transform.position);
-            sceneCamera.fieldOfView = 45f;
-            sceneCamera.nearClipPlane = 0.1f;
+            sceneCamera.transform.position = new Vector3(-1.25f, 2.65f, -2.25f);
+            sceneCamera.transform.rotation = Quaternion.LookRotation(
+                new Vector3(1.20f, 1.25f, 6.0f) - sceneCamera.transform.position,
+                Vector3.up);
+            sceneCamera.fieldOfView = 60f;
+            sceneCamera.nearClipPlane = 0.05f;
             sceneCamera.farClipPlane = 110f;
             sceneCamera.clearFlags = CameraClearFlags.Skybox;
 
@@ -405,20 +415,28 @@ namespace FishingMiniGame.Runtime
             _fallbackAnglerRenderers = _angler.GetComponentsInChildren<Renderer>(true);
             BuildExternalAngler();
 
+            _rodGripAnchor = new GameObject("RodGripAnchor").transform;
+            _rodGripAnchor.SetParent(_worldRoot, false);
+            _rodPosePivot = new GameObject("RodPosePivot").transform;
+            _rodPosePivot.SetParent(_rodGripAnchor, false);
+            _rodReactionPivot = new GameObject("RodReactionPivot").transform;
+            _rodReactionPivot.SetParent(_rodPosePivot, false);
+
             GameObject rodObject = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             rodObject.name = "Fishing Rod";
-            rodObject.transform.SetParent(_worldRoot, true);
+            rodObject.transform.SetParent(_rodReactionPivot, false);
             Collider rodCollider = rodObject.GetComponent<Collider>();
             if (rodCollider != null) rodCollider.enabled = false;
             rodObject.GetComponent<Renderer>().sharedMaterial = rodMaterial;
             _rod = rodObject.transform;
 
             GameObject tip = new GameObject("Rod Tip");
-            tip.transform.SetParent(_worldRoot, false);
+            tip.transform.SetParent(_rodReactionPivot, false);
+            tip.transform.localPosition = _neutralRodTipOffset;
             _rodTip = tip.transform;
 
             Material reelMaterial = CreateMaterial(new Color(0.82f, 0.85f, 0.83f), 0.64f, 0.8f);
-            GameObject reel = CreatePrimitive("Spinning Reel", PrimitiveType.Cylinder, _angler, new Vector3(0.25f, 1.42f, 0.94f), new Vector3(0.15f, 0.10f, 0.15f), reelMaterial);
+            GameObject reel = CreatePrimitive("Spinning Reel", PrimitiveType.Cylinder, _rodReactionPivot, new Vector3(0f, -0.11f, 0.14f), new Vector3(0.15f, 0.10f, 0.15f), reelMaterial);
             reel.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
             _reel = reel.transform;
         }
@@ -435,6 +453,7 @@ namespace FishingMiniGame.Runtime
             _anglerVisualAdapter = _externalAnglerModel.GetComponent<AnglerVisualAdapter>();
             if (_anglerVisualAdapter == null) _anglerVisualAdapter = _externalAnglerModel.AddComponent<AnglerVisualAdapter>();
             _anglerVisualAdapter.AutoBind();
+            _externalAnglerRenderers = _externalAnglerModel.GetComponentsInChildren<Renderer>(true);
         }
 
         private void BuildFishingObjects()
@@ -569,34 +588,52 @@ namespace FishingMiniGame.Runtime
         private void UpdateAnglerAndRod(FishingSnapshot snapshot)
         {
             float fight = snapshot.State == FishingPlayerState.Fighting ? controller.LastFeedback.Intensity : 0f;
-            float castBack = snapshot.State == FishingPlayerState.Casting ? 1f - snapshot.CastPower : 0f;
             if (_anglerVisualAdapter != null) _anglerVisualAdapter.Apply(snapshot, fight);
-            _angler.localRotation = Quaternion.Euler(
-                snapshot.State == FishingPlayerState.Fighting ? -4f - fight * 8f : 0f,
-                snapshot.State == FishingPlayerState.Fighting ? Mathf.Sin(Time.time * 2.2f) * 4f : 0f,
-                0f);
+            bool rodFocused = controller.Mode == FishingGameMode.SingleFishSession;
+            _angler.localRotation = rodFocused
+                ? Quaternion.identity
+                : Quaternion.Euler(
+                    snapshot.State == FishingPlayerState.Fighting ? -4f - fight * 8f : 0f,
+                    snapshot.State == FishingPlayerState.Fighting ? Mathf.Sin(Time.time * 2.2f) * 4f : 0f,
+                    0f);
 
-            Vector3 basePoint = _anglerVisualAdapter != null && _anglerVisualAdapter.HasRodGrip
-                ? _anglerVisualAdapter.RodGripPosition
-                : _angler.TransformPoint(new Vector3(0.27f, 1.49f, 0.78f));
-            Vector3 localTip = new Vector3(0.34f, 2.34f, 3.78f);
+            Vector3 basePoint = rodFocused
+                ? _angler.TransformPoint(new Vector3(0.88f, 1.12f, 0.55f))
+                : _anglerVisualAdapter != null && _anglerVisualAdapter.HasRodGrip
+                    ? _anglerVisualAdapter.RodGripPosition
+                    : _angler.TransformPoint(new Vector3(0.27f, 1.49f, 0.78f));
+            _rodGripAnchor.position = basePoint;
+            _rodGripAnchor.rotation = _angler.rotation;
+
+            FishingInputFrame input = controller.LastInputFrame;
+            float pitchDegrees = input.RodPitch >= 0f
+                ? -input.RodPitch * 25f
+                : -input.RodPitch * 25f;
+            Quaternion targetPose = Quaternion.Euler(pitchDegrees, input.RodYaw * 32f, 0f);
+            float poseBlend = 1f - Mathf.Exp(-12f * Time.unscaledDeltaTime);
+            _rodPosePivot.localRotation = Quaternion.Slerp(_rodPosePivot.localRotation, targetPose, poseBlend);
+
+            float reactionPitch = 0f;
+            float reactionYaw = 0f;
             if (snapshot.State == FishingPlayerState.Casting)
             {
-                localTip = Vector3.Lerp(new Vector3(0.12f, 2.82f, -2.25f), new Vector3(0.34f, 2.38f, 3.86f), EaseOut(snapshot.CastPower));
+                reactionPitch = Mathf.Lerp(-38f, 8f, EaseOut(snapshot.CastPower));
             }
             else if (snapshot.State == FishingPlayerState.Fighting)
             {
-                localTip = new Vector3(
-                    0.34f + snapshot.FightDirection * (0.22f + fight * 0.30f) + Mathf.Sin(Time.time * 4f) * 0.16f,
-                    1.96f - fight * 0.44f,
-                    3.62f - fight * 0.52f);
+                reactionPitch = 4f + fight * 8f;
+                reactionYaw = snapshot.FightDirection * (4f + fight * 5f) + Mathf.Sin(Time.time * 4f) * 2f;
             }
             else if (snapshot.State == FishingPlayerState.BiteWindow)
             {
-                localTip += new Vector3(Mathf.Sin(Time.time * 15f) * 0.10f, -0.20f, -0.10f);
+                reactionPitch = 4f + Mathf.Sin(Time.time * 15f) * 2.5f;
             }
-            localTip.y += castBack * 0.14f;
-            _rodTip.position = _angler.TransformPoint(localTip);
+            else if (snapshot.State == FishingPlayerState.Hooked)
+            {
+                reactionPitch = Mathf.Lerp(-10f, 0f, Mathf.Clamp01(snapshot.StateElapsedSeconds * 5f));
+            }
+            _rodReactionPivot.localRotation = Quaternion.Euler(reactionPitch, reactionYaw, 0f);
+            _rodTip.localPosition = _neutralRodTipOffset;
             PositionCylinder(_rod, basePoint, _rodTip.position, 0.035f);
             if (_reel != null)
             {
@@ -604,6 +641,18 @@ namespace FishingMiniGame.Runtime
                 _reel.position = basePoint + rodDirection * 0.10f + Vector3.down * 0.11f;
                 _reel.rotation = _rod.rotation * Quaternion.Euler(90f, 0f, 0f);
             }
+        }
+
+        private void UpdatePresentationMode()
+        {
+            bool rodFocused = controller.Mode == FishingGameMode.SingleFishSession;
+            if (_presentationModeInitialized && rodFocused == _lastRodFocusedMode) return;
+            _presentationModeInitialized = true;
+            _lastRodFocusedMode = rodFocused;
+
+            bool hasExternalAngler = _externalAnglerModel != null;
+            SetRenderersEnabled(_fallbackAnglerRenderers, !rodFocused && !hasExternalAngler);
+            SetRenderersEnabled(_externalAnglerRenderers, !rodFocused);
         }
 
         private void AnimateOcean()
