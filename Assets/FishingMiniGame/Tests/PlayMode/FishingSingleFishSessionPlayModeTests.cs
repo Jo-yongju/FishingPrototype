@@ -50,17 +50,13 @@ namespace FishingMiniGame.Tests
             facade.BeginRound();
 
             yield return EnterFighting(controller, input);
-            float deadline = Time.realtimeSinceStartup + 8f;
-            while (controller.Snapshot.State == FishingPlayerState.Fighting && Time.realtimeSinceStartup < deadline)
-            {
-                input.SetNextFrame(Frame(tension: 1f));
-                yield return null;
-            }
+            input.IsConnected = false;
+            yield return null;
 
             Assert.That(controller.Snapshot.State, Is.EqualTo(FishingPlayerState.Escaped));
             Assert.That(controller.SessionSnapshot.State, Is.EqualTo(FishingSessionState.Completed));
             Assert.That(controller.LastSessionResult.Outcome, Is.EqualTo(FishingSessionOutcome.Escaped));
-            Assert.That(controller.LastSessionResult.CycleResult.EscapeReason, Is.EqualTo(FishingEscapeReason.LineBroken));
+            Assert.That(controller.LastSessionResult.CycleResult.EscapeReason, Is.EqualTo(FishingEscapeReason.InputDisconnected));
 
             yield return new WaitForSecondsRealtime(2.6f);
             Assert.That(controller.Snapshot.State, Is.EqualTo(FishingPlayerState.Escaped));
@@ -153,14 +149,13 @@ namespace FishingMiniGame.Tests
             yield return EnterFighting(controller, input);
 
             float deadline = Time.realtimeSinceStartup + fightTimeout;
-            float rawTension = 0.5f;
             while (controller.Snapshot.State == FishingPlayerState.Fighting && Time.realtimeSinceStartup < deadline)
             {
-                rawTension = Mathf.Clamp01(rawTension + (0.52f - controller.Snapshot.TensionNormalized) * 0.85f);
-                bool running = controller.Snapshot.Feedback.State == FishingFeedbackState.Run;
-                float counterYaw = running ? -controller.Snapshot.FightDirection : 0f;
-                float reel = running ? 0.35f : 1f;
-                input.SetNextFrame(Frame(tension: rawTension, reel: reel, rodYaw: counterYaw));
+                bool running = controller.Snapshot.V2BehaviorState == FishingV2BehaviorState.Run;
+                float followYaw = running ? controller.Snapshot.V2FishDirectionNormalized : 0f;
+                float reel = running ? 0f : 1f;
+                float rodPitch = running ? 0f : 0.35f;
+                input.SetNextFrame(Frame(reel: reel, rodYaw: followYaw, rodPitch: rodPitch));
                 yield return null;
             }
 
@@ -208,7 +203,8 @@ namespace FishingMiniGame.Tests
             bool hookPressed = false,
             float tension = 0.5f,
             float reel = 0f,
-            float rodYaw = 0f)
+            float rodYaw = 0f,
+            float rodPitch = 0f)
         {
             return new FishingInputFrame
             {
@@ -218,6 +214,7 @@ namespace FishingMiniGame.Tests
                 TensionNormalized = tension,
                 ReelDelta = reel,
                 RodYaw = rodYaw,
+                RodPitch = rodPitch,
                 IsDeviceConnected = true
             };
         }

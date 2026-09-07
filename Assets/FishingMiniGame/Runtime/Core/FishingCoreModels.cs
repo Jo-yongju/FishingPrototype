@@ -211,6 +211,18 @@ namespace FishingMiniGame.Core
         public float LineDurability { get; internal set; }
         public float SlackDangerNormalized { get; internal set; }
         public float HighTensionDangerNormalized { get; internal set; }
+        public float FishDistanceMeters { get; internal set; }
+        public float FishStaminaNormalized { get; internal set; }
+        public float VirtualLineTensionNormalized { get; internal set; }
+        public float BreakStressNormalized { get; internal set; }
+        public float HookLooseRiskNormalized { get; internal set; }
+        public float RodResponseQualityNormalized { get; internal set; }
+        public float ReelEfficiencyNormalized { get; internal set; }
+        public float FightElapsedSeconds { get; internal set; }
+        public float V2FishForceNormalized { get; internal set; }
+        public float V2FishDirectionNormalized { get; internal set; }
+        public FishingV2BehaviorState V2BehaviorState { get; internal set; }
+        public FishingV2TensionZone VirtualTensionZone { get; internal set; }
         public int TotalScore { get; internal set; }
         public int CompletedCycles { get; internal set; }
         public string FishId { get; internal set; }
@@ -230,6 +242,8 @@ namespace FishingMiniGame.Core
         public int Seed = 20260821;
         public FishingRules Rules = new FishingRules();
         public FishProfile Fish = new FishProfile();
+        public bool UseV2FightModel;
+        public FishingV2FightTuning V2FightTuning = new FishingV2FightTuning();
     }
 
     public static class FishingMath

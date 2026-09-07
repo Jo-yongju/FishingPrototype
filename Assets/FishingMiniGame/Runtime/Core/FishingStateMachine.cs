@@ -25,6 +25,9 @@ namespace FishingMiniGame.Core
         private float _targetTensionShift;
         private float _smoothedTensionShift;
         private int _cycleNumber;
+        private bool _useV2FightModel;
+        private FishingV2FightTuning _v2FightTuning;
+        private FishingV2FightModel _v2FightModel;
 
         public FishingSnapshot Current { get; private set; }
         public FishingCycleResult LastResult { get; private set; }
@@ -41,6 +44,10 @@ namespace FishingMiniGame.Core
 
             _baseRules = (context.Rules ?? new FishingRules()).Copy();
             _fish = (context.Fish ?? new FishProfile()).Copy();
+            _useV2FightModel = context.UseV2FightModel;
+            _v2FightTuning = (context.V2FightTuning ?? new FishingV2FightTuning()).Copy();
+            _v2FightTuning.Sanitize();
+            _v2FightModel = new FishingV2FightModel(_v2FightTuning);
             _baseRules.Sanitize();
             _fish.Sanitize();
             ApplyFishRules();
@@ -221,6 +228,11 @@ namespace FishingMiniGame.Core
             else if (_stateElapsed >= _rules.HookSettleSeconds)
             {
                 _fightElapsed = 0f;
+                if (_useV2FightModel)
+                {
+                    _v2FightModel.Reset(_v2FightTuning);
+                    SyncV2Snapshot(new FishingV2BehaviorSample(FishingV2BehaviorState.None, 0f, 0f));
+                }
                 BeginNextFightPhase(true);
                 TransitionTo(FishingPlayerState.Fighting);
             }
@@ -235,8 +247,23 @@ namespace FishingMiniGame.Core
             }
 
             _fightElapsed += dt;
-            Current.FightRemainingSeconds = FishingMath.Max(0f, _rules.FightTimeoutSeconds - _fightElapsed);
+            Current.FightElapsedSeconds = _fightElapsed;
+            Current.FightRemainingSeconds = _useV2FightModel
+                ? 0f
+                : FishingMath.Max(0f, _rules.FightTimeoutSeconds - _fightElapsed);
             UpdateFightBehavior(dt);
+
+            if (_useV2FightModel)
+            {
+                TickV2Fighting(input, dt);
+                return;
+            }
+
+            TickLegacyFighting(input, dt);
+        }
+
+        private void TickLegacyFighting(FishingInputFrame input, float dt)
+        {
 
             float directionalControl = 0.5f;
             if (_fightPhase == FishingFeedbackState.Run)
@@ -323,6 +350,97 @@ namespace FishingMiniGame.Core
             {
                 Escape(FishingEscapeReason.FightTimedOut, "The fish exhausted your attempt");
             }
+        }
+
+        private void TickV2Fighting(FishingInputFrame input, float dt)
+        {
+            FishingV2BehaviorSample behavior = BuildV2BehaviorSample();
+            _v2FightModel.Tick(
+                dt,
+                SanitizeNormalized(input.ReelDelta),
+                SanitizeSigned(input.RodPitch),
+                SanitizeSigned(input.RodYaw),
+                behavior);
+            SyncV2Snapshot(behavior);
+            Current.Hint = BuildV2FightHint();
+
+            if (_v2FightModel.FailureCondition == FishingV2FailureCondition.LineBroken)
+            {
+                Escape(FishingEscapeReason.LineBroken, "The line snapped under sustained pressure");
+            }
+            else if (_v2FightModel.FailureCondition == FishingV2FailureCondition.SlackLine)
+            {
+                Escape(FishingEscapeReason.SlackLine, "The hook came loose from sustained slack");
+            }
+            else if (_v2FightModel.CanCatch)
+            {
+                CatchFish();
+            }
+        }
+
+        private FishingV2BehaviorSample BuildV2BehaviorSample()
+        {
+            FishingV2BehaviorState state;
+            switch (_fightPhase)
+            {
+                case FishingFeedbackState.Run:
+                    state = FishingV2BehaviorState.Run;
+                    break;
+                case FishingFeedbackState.Rest:
+                    state = FishingV2BehaviorState.Rest;
+                    break;
+                default:
+                    state = FishingV2BehaviorState.Fight;
+                    break;
+            }
+
+            return new FishingV2BehaviorSample(state, _phaseIntensity, _fightDirection);
+        }
+
+        private void SyncV2Snapshot(FishingV2BehaviorSample behavior)
+        {
+            Current.FishDistanceMeters = _v2FightModel.FishDistanceMeters;
+            Current.FishStaminaNormalized = _v2FightModel.FishStaminaNormalized;
+            Current.VirtualLineTensionNormalized = _v2FightModel.VirtualLineTensionNormalized;
+            Current.BreakStressNormalized = _v2FightModel.BreakStressNormalized;
+            Current.HookLooseRiskNormalized = _v2FightModel.HookLooseRiskNormalized;
+            Current.RodResponseQualityNormalized = _v2FightModel.RodResponseQualityNormalized;
+            Current.ReelEfficiencyNormalized = _v2FightModel.ReelEfficiencyNormalized;
+            Current.VirtualTensionZone = _v2FightModel.TensionZone;
+            Current.V2BehaviorState = behavior.State;
+            Current.V2FishForceNormalized = FishingMath.Clamp01(behavior.ForceNormalized);
+            Current.V2FishDirectionNormalized = FishingMath.Clamp(behavior.DirectionNormalized, -1f, 1f);
+
+            Current.FishHealth = Current.FishMaxHealth * Current.FishStaminaNormalized;
+            Current.LineDurability = 100f * (1f - Current.BreakStressNormalized);
+            Current.TensionNormalized = Current.VirtualLineTensionNormalized;
+            Current.FishTensionShift = Current.VirtualLineTensionNormalized - 0.5f;
+            Current.SlackDangerNormalized = Current.HookLooseRiskNormalized;
+            Current.HighTensionDangerNormalized = Current.BreakStressNormalized;
+            Current.DirectionalControlNormalized = Current.RodResponseQualityNormalized;
+        }
+
+        private string BuildV2FightHint()
+        {
+            if (Current.VirtualTensionZone == FishingV2TensionZone.Slack)
+            {
+                return "SLACK! Raise the rod and restore line pressure";
+            }
+            if (Current.VirtualTensionZone == FishingV2TensionZone.Danger)
+            {
+                return "DANGER! Stop reeling and move with the fish";
+            }
+            if (Current.V2BehaviorState == FishingV2BehaviorState.Run)
+            {
+                return Current.V2FishDirectionNormalized < 0f
+                    ? "Fish runs LEFT - follow LEFT and ease the reel"
+                    : "Fish runs RIGHT - follow RIGHT and ease the reel";
+            }
+            if (Current.V2BehaviorState == FishingV2BehaviorState.Rest)
+            {
+                return "Fish is resting - reel while pressure is safe";
+            }
+            return "Keep a moderate rod angle and reel through stable pressure";
         }
 
         private void TickOutcome()
@@ -501,6 +619,7 @@ namespace FishingMiniGame.Core
             Current.BiteDelayRemainingSeconds = 0f;
             Current.HookWindowRemainingSeconds = 0f;
             Current.FightRemainingSeconds = 0f;
+            Current.FightElapsedSeconds = 0f;
             Current.TensionNormalized = 0.5f;
             Current.RawTensionNormalized = 0.5f;
             Current.FishTensionShift = 0f;
@@ -512,6 +631,25 @@ namespace FishingMiniGame.Core
             Current.LineDurability = 100f;
             Current.SlackDangerNormalized = 0f;
             Current.HighTensionDangerNormalized = 0f;
+            if (_useV2FightModel && _v2FightModel != null)
+            {
+                _v2FightModel.Reset(_v2FightTuning);
+                SyncV2Snapshot(new FishingV2BehaviorSample(FishingV2BehaviorState.None, 0f, 0f));
+            }
+            else
+            {
+                Current.FishDistanceMeters = 0f;
+                Current.FishStaminaNormalized = 1f;
+                Current.VirtualLineTensionNormalized = 0.5f;
+                Current.BreakStressNormalized = 0f;
+                Current.HookLooseRiskNormalized = 0f;
+                Current.RodResponseQualityNormalized = 0.5f;
+                Current.ReelEfficiencyNormalized = 0f;
+                Current.V2BehaviorState = FishingV2BehaviorState.None;
+                Current.VirtualTensionZone = FishingV2TensionZone.Good;
+                Current.V2FishForceNormalized = 0f;
+                Current.V2FishDirectionNormalized = 0f;
+            }
             Current.FishId = _fish.FishId;
             Current.FishDisplayName = _fish.DisplayName;
             Current.DifficultyLabel = _fish.DifficultyLabel;
@@ -526,6 +664,12 @@ namespace FishingMiniGame.Core
         {
             if (float.IsNaN(value) || float.IsInfinity(value)) return 0f;
             return FishingMath.Clamp01(value);
+        }
+
+        private static float SanitizeSigned(float value)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value)) return 0f;
+            return FishingMath.Clamp(value, -1f, 1f);
         }
 
         private void EnsureInitialized()

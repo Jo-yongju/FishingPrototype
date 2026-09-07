@@ -301,7 +301,9 @@ namespace FishingMiniGame.Runtime
                 ParticipantId = _launchContext.LocalParticipantId,
                 Seed = _launchContext.Seed,
                 Rules = _baseRules,
-                Fish = firstFish
+                Fish = firstFish,
+                UseV2FightModel = _gameMode == FishingGameMode.SingleFishSession,
+                V2FightTuning = new FishingV2FightTuning()
             });
             _roundTracker.Initialize(_launchContext);
             _sessionTracker.Initialize(new FishingSessionContext
