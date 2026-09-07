@@ -2,7 +2,8 @@
   "name": "FishingMiniGame.EditModeTests",
   "rootNamespace": "FishingMiniGame.Tests",
   "references": [
-    "FishingMiniGame.Core"
+    "FishingMiniGame.Core",
+    "FishingMiniGame.Runtime"
   ],
   "includePlatforms": [
     "Editor"

@@ -76,7 +76,12 @@ namespace FishingMiniGame.Runtime
             }
         }
 
-        public void Apply(FishingSnapshot snapshot, float feedbackIntensity)
+        public void Apply(
+            FishingSnapshot snapshot,
+            float feedbackIntensity,
+            float animationPhaseSeconds,
+            bool paused,
+            float headShakeAccent)
         {
             if (snapshot == null) return;
             AutoBind();
@@ -86,10 +91,11 @@ namespace FishingMiniGame.Runtime
             SetFloat("SwimSpeed", swimSpeed);
             SetFloat("FightIntensity", feedbackIntensity);
 
-            if (animator != null) animator.speed = swimSpeed;
+            if (animator != null) animator.speed = paused ? 0f : swimSpeed;
             if (tail != null && animator == null)
             {
-                float swing = Mathf.Sin(Time.time * (8f + swimSpeed * 2f)) * (18f + feedbackIntensity * 12f);
+                float swing = Mathf.Sin(animationPhaseSeconds * (8f + swimSpeed * 2f)) *
+                    (18f + feedbackIntensity * 12f + headShakeAccent * 18f);
                 tail.localRotation = _tailBaseRotation * Quaternion.Euler(0f, swing, 0f);
             }
         }

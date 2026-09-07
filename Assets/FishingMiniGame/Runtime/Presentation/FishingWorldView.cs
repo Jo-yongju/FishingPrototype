@@ -10,6 +10,7 @@ namespace FishingMiniGame.Runtime
     {
         [SerializeField] private FishingGameController controller;
         [SerializeField] private FishingVisualSet visualSet;
+        [SerializeField] private FishingV2PresentationTuning v2PresentationTuning = new FishingV2PresentationTuning();
 
         private readonly List<LineRenderer> _waveCrests = new List<LineRenderer>();
         private readonly List<Transform> _seabirds = new List<Transform>();
@@ -20,6 +21,8 @@ namespace FishingMiniGame.Runtime
         private Transform _rodReactionPivot;
         private Transform _rodTip;
         private Transform _rod;
+        private Transform _rodMiddle;
+        private Transform _rodUpper;
         private Transform _bobber;
         private Transform _fish;
         private Transform _fishBody;
@@ -50,8 +53,17 @@ namespace FishingMiniGame.Runtime
         private float _nextNormalRefresh;
         private bool _lastRodFocusedMode;
         private bool _presentationModeInitialized;
+        private FishingV2PresentationFeedback _v2Feedback;
+        private FishingV2VisualFrame _v2Visual;
+        private Camera _sceneCamera;
+        private Vector3 _baseCameraPosition;
+        private Quaternion _baseCameraRotation;
         private readonly Vector3 _waterTarget = new Vector3(1.35f, 0.44f, 5.3f);
         private readonly Vector3 _neutralRodTipOffset = new Vector3(0f, 0.55f, 3.15f);
+
+        public FishingV2VisualFrame CurrentV2Visual => _v2Visual;
+        public Vector3 BaseCameraPosition => _baseCameraPosition;
+        public Quaternion BaseCameraRotation => _baseCameraRotation;
 
         public void ConfigureVisuals(FishingVisualSet value)
         {
@@ -62,6 +74,7 @@ namespace FishingMiniGame.Runtime
         {
             if (controller == null) controller = GetComponent<FishingGameController>();
             if (visualSet == null) visualSet = Resources.Load<FishingVisualSet>("FishingVisualSet");
+            _v2Feedback = new FishingV2PresentationFeedback(v2PresentationTuning);
             BuildCoastalWorld();
         }
 
@@ -73,11 +86,26 @@ namespace FishingMiniGame.Runtime
 
             FishingSnapshot snapshot = controller.Snapshot;
             UpdatePresentationMode();
+            bool useV2Presentation = controller.Mode == FishingGameMode.SingleFishSession;
+            if (useV2Presentation)
+            {
+                if (_v2Feedback == null)
+                    _v2Feedback = new FishingV2PresentationFeedback(v2PresentationTuning);
+                _v2Visual = _v2Feedback.Tick(
+                    FishingV2PresentationInput.FromSnapshot(snapshot),
+                    Time.unscaledDeltaTime,
+                    controller.IsPaused);
+            }
+            else
+            {
+                _v2Visual = default;
+            }
             ApplyFishVisual(snapshot);
             UpdateAnglerAndRod(snapshot);
 
             Vector3 rodPosition = _rodTip.position;
             Vector3 bobberPosition = rodPosition;
+            float visualPhase = useV2Presentation ? _v2Visual.AnimationPhaseSeconds : Time.time;
             switch (snapshot.State)
             {
                 case FishingPlayerState.Casting:
@@ -86,23 +114,56 @@ namespace FishingMiniGame.Runtime
                     break;
                 case FishingPlayerState.Waiting:
                 case FishingPlayerState.Hooked:
-                    float nibbleKick = snapshot.IsNibbling ? Mathf.Sin(Time.time * 20f) * 0.11f - 0.04f : 0f;
-                    bobberPosition = _waterTarget + new Vector3(
-                        snapshot.IsNibbling ? Mathf.Sin(Time.time * 15f) * 0.06f : 0f,
-                        Mathf.Sin(Time.time * 2.2f) * 0.05f + nibbleKick,
-                        0f);
+                    if (useV2Presentation)
+                    {
+                        float transientJitter = Mathf.Sin(visualPhase * 18f) * _v2Visual.LineJitterNormalized;
+                        bobberPosition = _waterTarget + new Vector3(
+                            _v2Visual.LateralPullNormalized * 0.18f + transientJitter * 0.07f,
+                            Mathf.Sin(Time.time * 2.2f) * 0.04f - _v2Visual.BobberDipMeters,
+                            transientJitter * 0.035f);
+                    }
+                    else
+                    {
+                        float nibbleKick = snapshot.IsNibbling ? Mathf.Sin(Time.time * 20f) * 0.11f - 0.04f : 0f;
+                        bobberPosition = _waterTarget + new Vector3(
+                            snapshot.IsNibbling ? Mathf.Sin(Time.time * 15f) * 0.06f : 0f,
+                            Mathf.Sin(Time.time * 2.2f) * 0.05f + nibbleKick,
+                            0f);
+                    }
                     break;
                 case FishingPlayerState.BiteWindow:
-                    bobberPosition = _waterTarget + new Vector3(
-                        Mathf.Sin(Time.time * 13f) * 0.08f,
-                        Mathf.Sin(Time.time * 18f) * 0.16f - 0.05f,
-                        Mathf.Cos(Time.time * 12f) * 0.06f);
+                    if (useV2Presentation)
+                    {
+                        float biteJerk = Mathf.Sin(visualPhase * 22f) * _v2Visual.BitePulseNormalized;
+                        bobberPosition = _waterTarget + new Vector3(
+                            biteJerk * 0.13f,
+                            -0.10f - _v2Visual.BobberDipMeters,
+                            Mathf.Cos(visualPhase * 19f) * _v2Visual.BitePulseNormalized * 0.09f);
+                    }
+                    else
+                    {
+                        bobberPosition = _waterTarget + new Vector3(
+                            Mathf.Sin(Time.time * 13f) * 0.08f,
+                            Mathf.Sin(Time.time * 18f) * 0.16f - 0.05f,
+                            Mathf.Cos(Time.time * 12f) * 0.06f);
+                    }
                     break;
                 case FishingPlayerState.Fighting:
-                    bobberPosition = _waterTarget + new Vector3(
-                        snapshot.FightDirection * (0.52f + snapshot.Feedback.Intensity * 0.78f) + Mathf.Sin(Time.time * 4.2f) * 0.22f,
-                        -0.08f,
-                        Mathf.Cos(Time.time * 2.5f) * 0.30f);
+                    if (useV2Presentation)
+                    {
+                        float movement = _v2Visual.FishMotionNormalized;
+                        bobberPosition = _waterTarget + new Vector3(
+                            _v2Visual.LateralPullNormalized * 1.22f + Mathf.Sin(visualPhase * 4.7f) * movement * 0.18f,
+                            -0.06f - _v2Visual.RodLoadNormalized * 0.07f,
+                            Mathf.Cos(visualPhase * 3.1f) * (0.10f + movement * 0.24f));
+                    }
+                    else
+                    {
+                        bobberPosition = _waterTarget + new Vector3(
+                            snapshot.FightDirection * (0.52f + snapshot.Feedback.Intensity * 0.78f) + Mathf.Sin(Time.time * 4.2f) * 0.22f,
+                            -0.08f,
+                            Mathf.Cos(Time.time * 2.5f) * 0.30f);
+                    }
                     break;
                 case FishingPlayerState.Caught:
                     bobberPosition = Vector3.Lerp(_waterTarget, rodPosition + Vector3.down * 0.7f,
@@ -111,8 +172,12 @@ namespace FishingMiniGame.Runtime
             }
 
             _bobber.position = bobberPosition;
-            _line.SetPosition(0, rodPosition);
-            _line.SetPosition(1, bobberPosition);
+            ApplyLineGeometry(
+                _line,
+                rodPosition,
+                bobberPosition,
+                useV2Presentation ? _v2Visual.LineSagMeters : 0f,
+                useV2Presentation ? _v2Visual.LineJitterNormalized * 0.035f : 0f);
 
             bool onWater = snapshot.State == FishingPlayerState.Waiting ||
                 snapshot.State == FishingPlayerState.BiteWindow ||
@@ -122,13 +187,19 @@ namespace FishingMiniGame.Runtime
             if (onWater)
             {
                 _ripple.transform.position = new Vector3(bobberPosition.x, WaveHeight(bobberPosition.x, bobberPosition.z, Time.time) + 0.035f, bobberPosition.z);
-                float speed = snapshot.State == FishingPlayerState.BiteWindow ? 5.5f :
-                    snapshot.Feedback.State == FishingFeedbackState.Run ? 4.2f : 1.35f;
-                float pulse = 0.7f + Mathf.Repeat(Time.time * speed, 1f) * 0.95f;
-                _ripple.transform.localScale = new Vector3(pulse, 1f, pulse);
+                float disturbance = useV2Presentation ? _v2Visual.SurfaceDisturbanceNormalized : controller.LastFeedback.Intensity;
+                float speed = useV2Presentation
+                    ? Mathf.Lerp(1.2f, 7.2f, disturbance)
+                    : snapshot.State == FishingPlayerState.BiteWindow ? 5.5f :
+                        snapshot.Feedback.State == FishingFeedbackState.Run ? 4.2f : 1.35f;
+                float pulse = 0.58f + Mathf.Repeat(visualPhase * speed, 1f) * (0.58f + disturbance * 0.88f);
+                _ripple.transform.localScale = new Vector3(
+                    pulse * (1f + Mathf.Abs(useV2Presentation ? _v2Visual.LateralPullNormalized : 0f) * 0.32f),
+                    1f,
+                    pulse);
                 Color rippleColor = snapshot.State == FishingPlayerState.BiteWindow
                     ? new Color(1f, 0.78f, 0.23f, 0.95f)
-                    : new Color(0.82f, 0.98f, 1f, 0.68f);
+                    : Color.Lerp(new Color(0.82f, 0.98f, 1f, 0.58f), new Color(0.30f, 0.92f, 1f, 0.92f), disturbance);
                 _ripple.startColor = rippleColor;
                 _ripple.endColor = new Color(rippleColor.r, rippleColor.g, rippleColor.b, 0f);
             }
@@ -137,35 +208,41 @@ namespace FishingMiniGame.Runtime
             _fish.gameObject.SetActive(showFish);
             if (showFish)
             {
-                float resistance = 0.55f + controller.LastFeedback.Intensity;
+                float resistance = useV2Presentation
+                    ? 0.35f + _v2Visual.FishMotionNormalized
+                    : 0.55f + controller.LastFeedback.Intensity;
+                float direction = useV2Presentation ? snapshot.V2FishDirectionNormalized : snapshot.FightDirection;
                 bool isCaught = snapshot.State == FishingPlayerState.Caught;
                 Vector3 fishOffset = isCaught
                     ? new Vector3(-0.72f, -0.52f, 0f)
                     : new Vector3(
-                        snapshot.FightDirection * (0.28f + resistance * 0.35f) + Mathf.Sin(Time.time * (3f + resistance)) * resistance * 0.35f,
+                        direction * (0.28f + resistance * 0.35f) + Mathf.Sin(visualPhase * (3f + resistance)) * resistance * 0.35f,
                         -0.66f,
-                        0.35f + Mathf.Cos(Time.time * 2.1f) * 0.16f);
+                        0.35f + Mathf.Cos(visualPhase * 2.1f) * 0.16f);
                 _fish.position = bobberPosition + fishOffset;
                 _fish.rotation = Quaternion.Euler(
-                    Mathf.Sin(Time.time * 4.4f) * 9f,
-                    92f + snapshot.FightDirection * 22f + Mathf.Sin(Time.time * 2.8f) * (18f + resistance * 10f),
+                    Mathf.Sin(visualPhase * 4.4f) * 9f,
+                    92f + direction * 22f + Mathf.Sin(visualPhase * 2.8f) * (18f + resistance * 10f),
                     isCaught ? -24f : -7f);
                 if (isCaught && _fishVisualAdapter != null && _fishVisualAdapter.HasHookAnchor)
                 {
                     Vector3 desiredHookPosition = bobberPosition + Vector3.down * 0.08f;
                     _fish.position += desiredHookPosition - _fishVisualAdapter.HookAnchorPosition;
                 }
-                float tailSwing = Mathf.Sin(Time.time * (9f + resistance * 5f)) * (24f + resistance * 11f);
+                float tailSwing = Mathf.Sin(visualPhase * (9f + resistance * 5f)) * (24f + resistance * 11f);
                 if (_fishVisualAdapter != null)
                 {
-                    _fishVisualAdapter.Apply(snapshot, resistance);
+                    _fishVisualAdapter.Apply(snapshot, resistance, visualPhase, controller.IsPaused,
+                        useV2Presentation ? Mathf.Abs(_v2Visual.LineJitterNormalized) : 0f);
                 }
                 else
                 {
                     if (_fishTail != null) _fishTail.localRotation = Quaternion.Euler(0f, tailSwing, 0f);
-                    if (_pectoralFin != null) _pectoralFin.localRotation = Quaternion.Euler(0f, 0f, -26f + Mathf.Sin(Time.time * 7f) * 16f);
+                    if (_pectoralFin != null) _pectoralFin.localRotation = Quaternion.Euler(0f, 0f, -26f + Mathf.Sin(visualPhase * 7f) * 16f);
                 }
             }
+
+            ApplyCameraFeedback(useV2Presentation);
         }
 
         private void BuildCoastalWorld()
@@ -204,21 +281,23 @@ namespace FishingMiniGame.Runtime
                 RenderSettings.skybox = sky;
             }
 
-            Camera sceneCamera = Camera.main;
-            if (sceneCamera == null)
+            _sceneCamera = Camera.main;
+            if (_sceneCamera == null)
             {
                 GameObject cameraObject = new GameObject("Main Camera");
                 cameraObject.tag = "MainCamera";
-                sceneCamera = cameraObject.AddComponent<Camera>();
+                _sceneCamera = cameraObject.AddComponent<Camera>();
             }
-            sceneCamera.transform.position = new Vector3(-1.25f, 2.65f, -2.25f);
-            sceneCamera.transform.rotation = Quaternion.LookRotation(
-                new Vector3(1.20f, 1.25f, 6.0f) - sceneCamera.transform.position,
+            _sceneCamera.transform.position = new Vector3(-1.25f, 2.65f, -2.25f);
+            _sceneCamera.transform.rotation = Quaternion.LookRotation(
+                new Vector3(1.20f, 1.25f, 6.0f) - _sceneCamera.transform.position,
                 Vector3.up);
-            sceneCamera.fieldOfView = 60f;
-            sceneCamera.nearClipPlane = 0.05f;
-            sceneCamera.farClipPlane = 110f;
-            sceneCamera.clearFlags = CameraClearFlags.Skybox;
+            _sceneCamera.fieldOfView = 60f;
+            _sceneCamera.nearClipPlane = 0.05f;
+            _sceneCamera.farClipPlane = 110f;
+            _sceneCamera.clearFlags = CameraClearFlags.Skybox;
+            _baseCameraPosition = _sceneCamera.transform.position;
+            _baseCameraRotation = _sceneCamera.transform.rotation;
 
             Light sun = FindAnyObjectByType<Light>();
             if (sun == null)
@@ -430,6 +509,22 @@ namespace FishingMiniGame.Runtime
             rodObject.GetComponent<Renderer>().sharedMaterial = rodMaterial;
             _rod = rodObject.transform;
 
+            GameObject middleRodObject = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            middleRodObject.name = "Fishing Rod Middle";
+            middleRodObject.transform.SetParent(_rodReactionPivot, false);
+            Collider middleCollider = middleRodObject.GetComponent<Collider>();
+            if (middleCollider != null) middleCollider.enabled = false;
+            middleRodObject.GetComponent<Renderer>().sharedMaterial = rodMaterial;
+            _rodMiddle = middleRodObject.transform;
+
+            GameObject upperRodObject = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            upperRodObject.name = "Fishing Rod Upper";
+            upperRodObject.transform.SetParent(_rodReactionPivot, false);
+            Collider upperCollider = upperRodObject.GetComponent<Collider>();
+            if (upperCollider != null) upperCollider.enabled = false;
+            upperRodObject.GetComponent<Renderer>().sharedMaterial = rodMaterial;
+            _rodUpper = upperRodObject.transform;
+
             GameObject tip = new GameObject("Rod Tip");
             tip.transform.SetParent(_rodReactionPivot, false);
             tip.transform.localPosition = _neutralRodTipOffset;
@@ -469,7 +564,7 @@ namespace FishingMiniGame.Runtime
             GameObject lineObject = new GameObject("Fishing Line");
             lineObject.transform.SetParent(_worldRoot, false);
             _line = lineObject.AddComponent<LineRenderer>();
-            _line.positionCount = 2;
+            _line.positionCount = 3;
             _line.startWidth = 0.014f;
             _line.endWidth = 0.007f;
             _line.numCornerVertices = 3;
@@ -587,9 +682,11 @@ namespace FishingMiniGame.Runtime
 
         private void UpdateAnglerAndRod(FishingSnapshot snapshot)
         {
-            float fight = snapshot.State == FishingPlayerState.Fighting ? controller.LastFeedback.Intensity : 0f;
-            if (_anglerVisualAdapter != null) _anglerVisualAdapter.Apply(snapshot, fight);
             bool rodFocused = controller.Mode == FishingGameMode.SingleFishSession;
+            float fight = rodFocused
+                ? _v2Visual.RodLoadNormalized
+                : snapshot.State == FishingPlayerState.Fighting ? controller.LastFeedback.Intensity : 0f;
+            if (_anglerVisualAdapter != null) _anglerVisualAdapter.Apply(snapshot, fight);
             _angler.localRotation = rodFocused
                 ? Quaternion.identity
                 : Quaternion.Euler(
@@ -619,6 +716,16 @@ namespace FishingMiniGame.Runtime
             {
                 reactionPitch = Mathf.Lerp(-38f, 8f, EaseOut(snapshot.CastPower));
             }
+            else if (rodFocused && snapshot.State != FishingPlayerState.Idle)
+            {
+                reactionPitch = _v2Visual.RodLoadNormalized * 11f + _v2Visual.RodKickNormalized * 15f;
+                reactionYaw = _v2Visual.LateralPullNormalized * 13f +
+                    Mathf.Sin(_v2Visual.AnimationPhaseSeconds * 17f) * _v2Visual.LineJitterNormalized * 3.5f;
+                if (snapshot.State == FishingPlayerState.Hooked)
+                {
+                    reactionPitch -= Mathf.Lerp(12f, 0f, Mathf.Clamp01(snapshot.StateElapsedSeconds * 5f));
+                }
+            }
             else if (snapshot.State == FishingPlayerState.Fighting)
             {
                 reactionPitch = 4f + fight * 8f;
@@ -633,14 +740,60 @@ namespace FishingMiniGame.Runtime
                 reactionPitch = Mathf.Lerp(-10f, 0f, Mathf.Clamp01(snapshot.StateElapsedSeconds * 5f));
             }
             _rodReactionPivot.localRotation = Quaternion.Euler(reactionPitch, reactionYaw, 0f);
-            _rodTip.localPosition = _neutralRodTipOffset;
-            PositionCylinder(_rod, basePoint, _rodTip.position, 0.035f);
+            _rodTip.localPosition = _neutralRodTipOffset + (rodFocused
+                ? new Vector3(
+                    _v2Visual.LateralPullNormalized * 0.18f,
+                    -_v2Visual.RodLoadNormalized * 0.36f - _v2Visual.RodKickNormalized * 0.15f,
+                    0f)
+                : Vector3.zero);
+            PositionRodSegments(basePoint, rodFocused ? _v2Visual.RodLoadNormalized : 0f,
+                rodFocused ? _v2Visual.LateralPullNormalized : 0f);
             if (_reel != null)
             {
                 Vector3 rodDirection = (_rodTip.position - basePoint).normalized;
                 _reel.position = basePoint + rodDirection * 0.10f + Vector3.down * 0.11f;
                 _reel.rotation = _rod.rotation * Quaternion.Euler(90f, 0f, 0f);
             }
+        }
+
+        private void PositionRodSegments(Vector3 basePoint, float load, float lateralPull)
+        {
+            Vector3 tipPosition = _rodTip.position;
+            Vector3 rodVector = tipPosition - basePoint;
+            Vector3 lateral = _rodReactionPivot.TransformDirection(Vector3.right) * lateralPull * 0.16f;
+            Vector3 bend = Vector3.down * load * 0.30f;
+            Vector3 lowerEnd = basePoint + rodVector * 0.34f + lateral * 0.12f + bend * 0.10f;
+            Vector3 middleEnd = basePoint + rodVector * 0.68f + lateral * 0.52f + bend * 0.52f;
+            PositionCylinder(_rod, basePoint, lowerEnd, 0.038f);
+            PositionCylinder(_rodMiddle, lowerEnd, middleEnd, 0.032f);
+            PositionCylinder(_rodUpper, middleEnd, tipPosition, 0.023f);
+        }
+
+        public static void ApplyLineGeometry(
+            LineRenderer line,
+            Vector3 start,
+            Vector3 end,
+            float sagMeters,
+            float lateralJitterMeters = 0f)
+        {
+            if (line == null) return;
+            line.positionCount = 3;
+            line.SetPosition(0, start);
+            line.SetPosition(1, Vector3.Lerp(start, end, 0.52f) +
+                Vector3.down * Mathf.Max(0f, sagMeters) +
+                Vector3.right * lateralJitterMeters);
+            line.SetPosition(2, end);
+        }
+
+        private void ApplyCameraFeedback(bool useV2Presentation)
+        {
+            if (_sceneCamera == null) return;
+            Vector3 offset = useV2Presentation ? _v2Visual.CameraPositionOffset : Vector3.zero;
+            Quaternion rotationOffset = useV2Presentation
+                ? Quaternion.Euler(_v2Visual.CameraRotationEuler)
+                : Quaternion.identity;
+            _sceneCamera.transform.position = _baseCameraPosition + offset;
+            _sceneCamera.transform.rotation = _baseCameraRotation * rotationOffset;
         }
 
         private void UpdatePresentationMode()
