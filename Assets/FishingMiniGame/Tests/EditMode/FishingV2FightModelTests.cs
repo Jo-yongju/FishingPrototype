@@ -213,6 +213,27 @@ namespace FishingMiniGame.Tests
             Assert.That(model.FailureCondition, Is.EqualTo(FishingV2FailureCondition.SlackLine));
         }
 
+        [Test]
+        public void HeadShakeModifier_RaisesTargetTensionWithoutInstantBreak()
+        {
+            FishingV2FightTuning tuning = new FishingV2FightTuning
+            {
+                HeadShakeMaxTensionModifier = 0.12f
+            };
+            FishingV2FightModel baseline = new FishingV2FightModel(tuning);
+            FishingV2FightModel shaken = new FishingV2FightModel(tuning);
+            FishingV2BehaviorSample behavior = Sample(FishingV2BehaviorState.Fight, 0.6f);
+
+            baseline.Tick(0.05f, 0.5f, 0.35f, 0f, behavior, 0f);
+            shaken.Tick(0.05f, 0.5f, 0.35f, 0f, behavior,
+                tuning.HeadShakeMaxTensionModifier);
+
+            Assert.That(shaken.TargetVirtualLineTensionNormalized,
+                Is.GreaterThan(baseline.TargetVirtualLineTensionNormalized));
+            Assert.That(shaken.FailureCondition, Is.EqualTo(FishingV2FailureCondition.None));
+            Assert.That(shaken.BreakStressNormalized, Is.LessThan(1f));
+        }
+
         private static FishingV2BehaviorSample Sample(
             FishingV2BehaviorState state,
             float force = 0.5f,

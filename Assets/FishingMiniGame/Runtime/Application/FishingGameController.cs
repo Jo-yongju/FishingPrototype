@@ -303,7 +303,8 @@ namespace FishingMiniGame.Runtime
                 Rules = _baseRules,
                 Fish = firstFish,
                 UseV2FightModel = _gameMode == FishingGameMode.SingleFishSession,
-                V2FightTuning = new FishingV2FightTuning()
+                V2FightTuning = new FishingV2FightTuning(),
+                V2FishAITuning = new FishingV2FishAITuning()
             });
             _roundTracker.Initialize(_launchContext);
             _sessionTracker.Initialize(new FishingSessionContext

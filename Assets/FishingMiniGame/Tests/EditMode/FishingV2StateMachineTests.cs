@@ -98,7 +98,112 @@ namespace FishingMiniGame.Tests
                 Is.EqualTo(lowInput.Current.VirtualLineTensionNormalized).Within(0.0001f));
         }
 
+        [Test]
+        public void HookedToFighting_StartsFormalAIInFight()
+        {
+            FishingStateMachine machine = CreateMachine(
+                new FishingV2FightTuning(), new FishingV2FishAITuning());
+
+            DriveToFighting(machine, 0.5f);
+
+            Assert.That(machine.Current.V2BehaviorState, Is.EqualTo(FishingV2BehaviorState.Fight));
+            Assert.That(machine.Current.Feedback.State, Is.EqualTo(FishingFeedbackState.Fight));
+            Assert.That(machine.Current.AIStaminaBand, Is.EqualTo(FishingV2StaminaBand.High));
+            Assert.That(machine.Current.AIPhaseRemainingSeconds, Is.GreaterThan(0f));
+        }
+
+        [Test]
+        public void InjectedAITuning_DrivesTelegraphedRunIndependentlyOfLegacyProfile()
+        {
+            FishingV2FishAITuning aiTuning = new FishingV2FishAITuning
+            {
+                FightMinDuration = 0.05f,
+                FightMaxDuration = 0.05f,
+                HighFightWeight = 0f,
+                HighRunWeight = 1f,
+                HighRestWeight = 0f,
+                RunTelegraphMinDuration = 0.2f,
+                RunTelegraphMaxDuration = 0.2f,
+                HeadShakeChance = 0f,
+                FinalRunStaminaThreshold = 0f
+            };
+            FishingStateMachine machine = CreateMachine(new FishingV2FightTuning(), aiTuning);
+            DriveToFighting(machine, 0.5f);
+
+            machine.Tick(Frame(), 0.05f);
+
+            Assert.That(machine.Current.IsRunTelegraphing, Is.True);
+            Assert.That(machine.Current.V2BehaviorState, Is.Not.EqualTo(FishingV2BehaviorState.Run));
+            Assert.That(machine.Current.RunTelegraphDirectionNormalized, Is.EqualTo(-1f).Or.EqualTo(1f));
+        }
+
+        [Test]
+        public void FinalRunPending_SuppressesCatchUntilTelegraphedRunStarts()
+        {
+            FishingV2FightTuning fightTuning = new FishingV2FightTuning
+            {
+                InitialDistanceMeters = 1f,
+                CatchDistanceMeters = 2f,
+                CatchStaminaNormalized = 1f
+            };
+            FishingV2FishAITuning aiTuning = new FishingV2FishAITuning
+            {
+                FightMinDuration = 2f,
+                FightMaxDuration = 2f,
+                HeadShakeChance = 0f,
+                FinalRunChance = 0.99f,
+                FinalRunStaminaThreshold = 1f,
+                FinalRunDistanceThreshold = 2f,
+                RunTelegraphMinDuration = 0.2f,
+                RunTelegraphMaxDuration = 0.2f
+            };
+            FishingStateMachine machine = CreateMachine(fightTuning, aiTuning, 1);
+            DriveToFighting(machine, 0.5f);
+
+            machine.Tick(Frame(), 0.05f);
+
+            Assert.That(machine.Current.FinalRunPending, Is.True);
+            Assert.That(machine.Current.IsRunTelegraphing, Is.True);
+            Assert.That(machine.Current.State, Is.EqualTo(FishingPlayerState.Fighting));
+        }
+
+        [Test]
+        public void LegacyBehaviorKnobs_DoNotChangeV2AISequence()
+        {
+            FishingV2FishAITuning tuning = new FishingV2FishAITuning { HeadShakeChance = 0f };
+            FishingStateMachine runLegacyKnobs = CreateMachine(
+                new FishingV2FightTuning(), tuning, 73, 1f, 0f, 0.35f);
+            FishingStateMachine restLegacyKnobs = CreateMachine(
+                new FishingV2FightTuning(), tuning, 73, 0f, 1f, 30f);
+            DriveToFighting(runLegacyKnobs, 0.5f);
+            DriveToFighting(restLegacyKnobs, 0.5f);
+
+            for (int i = 0; i < 80; i++)
+            {
+                FishingInputFrame input = Frame(pitch: 0.35f);
+                runLegacyKnobs.Tick(input, 0.05f);
+                restLegacyKnobs.Tick(input, 0.05f);
+                Assert.That(runLegacyKnobs.Current.V2BehaviorState,
+                    Is.EqualTo(restLegacyKnobs.Current.V2BehaviorState));
+                Assert.That(runLegacyKnobs.Current.V2FishDirectionNormalized,
+                    Is.EqualTo(restLegacyKnobs.Current.V2FishDirectionNormalized));
+                Assert.That(runLegacyKnobs.Current.V2FishForceNormalized,
+                    Is.EqualTo(restLegacyKnobs.Current.V2FishForceNormalized));
+            }
+        }
+
         private static FishingStateMachine CreateMachine(FishingV2FightTuning tuning)
+        {
+            return CreateMachine(tuning, new FishingV2FishAITuning());
+        }
+
+        private static FishingStateMachine CreateMachine(
+            FishingV2FightTuning tuning,
+            FishingV2FishAITuning aiTuning,
+            int seed = 73,
+            float legacyRunChance = 0f,
+            float legacyRestChance = 1f,
+            float legacyPhaseSeconds = 10f)
         {
             FishProfile fish = new FishProfile
             {
@@ -106,10 +211,10 @@ namespace FishingMiniGame.Tests
                 MinBiteDelaySeconds = 0.05f,
                 MaxBiteDelaySeconds = 0.05f,
                 HookWindowSeconds = 1f,
-                RunChance = 0f,
-                RestChance = 1f,
-                MinBehaviorPhaseSeconds = 10f,
-                MaxBehaviorPhaseSeconds = 10f
+                RunChance = legacyRunChance,
+                RestChance = legacyRestChance,
+                MinBehaviorPhaseSeconds = legacyPhaseSeconds,
+                MaxBehaviorPhaseSeconds = legacyPhaseSeconds
             };
             FishingRules rules = new FishingRules
             {
@@ -121,11 +226,12 @@ namespace FishingMiniGame.Tests
             FishingStateMachine machine = new FishingStateMachine();
             machine.Initialize(new FishingRoundContext
             {
-                Seed = 73,
+                Seed = seed,
                 Rules = rules,
                 Fish = fish,
                 UseV2FightModel = true,
-                V2FightTuning = tuning
+                V2FightTuning = tuning,
+                V2FishAITuning = aiTuning
             });
             return machine;
         }

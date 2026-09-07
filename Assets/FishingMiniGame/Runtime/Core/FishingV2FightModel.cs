@@ -93,6 +93,7 @@ namespace FishingMiniGame.Core
         public float FightIdealTensionModifier = -0.05f;
         public float FightHighPitchTensionModifier = 0.20f;
         public float RestLowPitchTensionModifier = -0.18f;
+        public float HeadShakeMaxTensionModifier = 0.12f;
 
         public FishingV2FightTuning Copy()
         {
@@ -135,6 +136,7 @@ namespace FishingMiniGame.Core
             LooseRiskRecoveryThreshold = FishingMath.Clamp(LooseRiskRecoveryThreshold, SlackThreshold, 1f);
             LooseRiskRecoveryPerSecond = FishingMath.Max(0f, LooseRiskRecoveryPerSecond);
             FightIdealPitch = FishingMath.Clamp(FightIdealPitch, -0.99f, 0.99f);
+            HeadShakeMaxTensionModifier = FishingMath.Clamp01(HeadShakeMaxTensionModifier);
         }
     }
 
@@ -185,7 +187,8 @@ namespace FishingMiniGame.Core
             float reelInput,
             float rodPitch,
             float rodYaw,
-            FishingV2BehaviorSample behavior)
+            FishingV2BehaviorSample behavior,
+            float eventTensionModifier = 0f)
         {
             if (FailureCondition != FishingV2FailureCondition.None) return;
 
@@ -226,7 +229,8 @@ namespace FishingMiniGame.Core
 
             float forceOffset = (force - 0.5f) * _tuning.FishForceTensionRange;
             TargetVirtualLineTensionNormalized = FishingMath.Clamp01(
-                baseTension + forceOffset + reelStress * reel + rodModifier);
+                baseTension + forceOffset + reelStress * reel + rodModifier +
+                FishingMath.Clamp(eventTensionModifier, 0f, 1f));
             float tensionRate = TargetVirtualLineTensionNormalized > VirtualLineTensionNormalized
                 ? _tuning.TensionRisePerSecond
                 : _tuning.TensionFallPerSecond;

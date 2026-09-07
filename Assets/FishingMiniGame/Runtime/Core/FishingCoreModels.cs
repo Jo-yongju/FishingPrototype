@@ -222,6 +222,18 @@ namespace FishingMiniGame.Core
         public float V2FishForceNormalized { get; internal set; }
         public float V2FishDirectionNormalized { get; internal set; }
         public FishingV2BehaviorState V2BehaviorState { get; internal set; }
+        public FishingV2StaminaBand AIStaminaBand { get; internal set; }
+        public float AIPhaseRemainingSeconds { get; internal set; }
+        public bool IsRunTelegraphing { get; internal set; }
+        public float RunTelegraphDirectionNormalized { get; internal set; }
+        public float RunTelegraphRemainingSeconds { get; internal set; }
+        public bool HeadShakeActive { get; internal set; }
+        public float HeadShakeIntensityNormalized { get; internal set; }
+        public int HeadShakeEventSequence { get; internal set; }
+        public bool FinalRunDecisionMade { get; internal set; }
+        public bool FinalRunPending { get; internal set; }
+        public bool IsFinalRun { get; internal set; }
+        public bool FinalRunUsed { get; internal set; }
         public FishingV2TensionZone VirtualTensionZone { get; internal set; }
         public int TotalScore { get; internal set; }
         public int CompletedCycles { get; internal set; }
@@ -244,6 +256,7 @@ namespace FishingMiniGame.Core
         public FishProfile Fish = new FishProfile();
         public bool UseV2FightModel;
         public FishingV2FightTuning V2FightTuning = new FishingV2FightTuning();
+        public FishingV2FishAITuning V2FishAITuning = new FishingV2FishAITuning();
     }
 
     public static class FishingMath

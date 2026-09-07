@@ -26,8 +26,12 @@ namespace FishingMiniGame.Core
         private float _smoothedTensionShift;
         private int _cycleNumber;
         private bool _useV2FightModel;
+        private int _v2AISeed;
         private FishingV2FightTuning _v2FightTuning;
         private FishingV2FightModel _v2FightModel;
+        private FishingV2FishAITuning _v2FishAITuning;
+        private FishingV2FishAI _v2FishAI;
+        private FishingV2FishAIOutput _v2FishAIOutput;
 
         public FishingSnapshot Current { get; private set; }
         public FishingCycleResult LastResult { get; private set; }
@@ -45,9 +49,14 @@ namespace FishingMiniGame.Core
             _baseRules = (context.Rules ?? new FishingRules()).Copy();
             _fish = (context.Fish ?? new FishProfile()).Copy();
             _useV2FightModel = context.UseV2FightModel;
+            _v2AISeed = context.Seed;
             _v2FightTuning = (context.V2FightTuning ?? new FishingV2FightTuning()).Copy();
             _v2FightTuning.Sanitize();
             _v2FightModel = new FishingV2FightModel(_v2FightTuning);
+            _v2FishAITuning = (context.V2FishAITuning ?? new FishingV2FishAITuning()).Copy();
+            _v2FishAITuning.Sanitize();
+            _v2FishAI = new FishingV2FishAI(_v2FishAITuning, _v2AISeed, _fish.PullStrength);
+            _v2FishAIOutput = _v2FishAI.Current;
             _baseRules.Sanitize();
             _fish.Sanitize();
             ApplyFishRules();
@@ -231,9 +240,14 @@ namespace FishingMiniGame.Core
                 if (_useV2FightModel)
                 {
                     _v2FightModel.Reset(_v2FightTuning);
-                    SyncV2Snapshot(new FishingV2BehaviorSample(FishingV2BehaviorState.None, 0f, 0f));
+                    _v2FishAI.Reset(_v2FishAITuning, _v2AISeed + _cycleNumber, _fish.PullStrength);
+                    _v2FishAIOutput = _v2FishAI.Current;
+                    SyncV2Snapshot(_v2FishAIOutput);
                 }
-                BeginNextFightPhase(true);
+                else
+                {
+                    BeginNextFightPhase(true);
+                }
                 TransitionTo(FishingPlayerState.Fighting);
             }
         }
@@ -251,7 +265,6 @@ namespace FishingMiniGame.Core
             Current.FightRemainingSeconds = _useV2FightModel
                 ? 0f
                 : FishingMath.Max(0f, _rules.FightTimeoutSeconds - _fightElapsed);
-            UpdateFightBehavior(dt);
 
             if (_useV2FightModel)
             {
@@ -259,6 +272,7 @@ namespace FishingMiniGame.Core
                 return;
             }
 
+            UpdateFightBehavior(dt);
             TickLegacyFighting(input, dt);
         }
 
@@ -354,14 +368,22 @@ namespace FishingMiniGame.Core
 
         private void TickV2Fighting(FishingInputFrame input, float dt)
         {
-            FishingV2BehaviorSample behavior = BuildV2BehaviorSample();
+            _v2FishAIOutput = _v2FishAI.Tick(
+                dt,
+                _v2FightModel.FishStaminaNormalized,
+                _v2FightModel.FishDistanceMeters);
+            float eventTensionModifier = _v2FishAIOutput.HeadShakeActive
+                ? _v2FishAIOutput.HeadShakeIntensityNormalized *
+                  _v2FightTuning.HeadShakeMaxTensionModifier
+                : 0f;
             _v2FightModel.Tick(
                 dt,
                 SanitizeNormalized(input.ReelDelta),
                 SanitizeSigned(input.RodPitch),
                 SanitizeSigned(input.RodYaw),
-                behavior);
-            SyncV2Snapshot(behavior);
+                _v2FishAIOutput.Behavior,
+                eventTensionModifier);
+            SyncV2Snapshot(_v2FishAIOutput);
             Current.Hint = BuildV2FightHint();
 
             if (_v2FightModel.FailureCondition == FishingV2FailureCondition.LineBroken)
@@ -372,33 +394,20 @@ namespace FishingMiniGame.Core
             {
                 Escape(FishingEscapeReason.SlackLine, "The hook came loose from sustained slack");
             }
+            else if (_v2FishAIOutput.FinalRunPending)
+            {
+                // A successful final-run roll owns the next beat. The metric
+                // model remains unchanged; only the state transition is gated.
+            }
             else if (_v2FightModel.CanCatch)
             {
                 CatchFish();
             }
         }
 
-        private FishingV2BehaviorSample BuildV2BehaviorSample()
+        private void SyncV2Snapshot(FishingV2FishAIOutput aiOutput)
         {
-            FishingV2BehaviorState state;
-            switch (_fightPhase)
-            {
-                case FishingFeedbackState.Run:
-                    state = FishingV2BehaviorState.Run;
-                    break;
-                case FishingFeedbackState.Rest:
-                    state = FishingV2BehaviorState.Rest;
-                    break;
-                default:
-                    state = FishingV2BehaviorState.Fight;
-                    break;
-            }
-
-            return new FishingV2BehaviorSample(state, _phaseIntensity, _fightDirection);
-        }
-
-        private void SyncV2Snapshot(FishingV2BehaviorSample behavior)
-        {
+            FishingV2BehaviorSample behavior = aiOutput.Behavior;
             Current.FishDistanceMeters = _v2FightModel.FishDistanceMeters;
             Current.FishStaminaNormalized = _v2FightModel.FishStaminaNormalized;
             Current.VirtualLineTensionNormalized = _v2FightModel.VirtualLineTensionNormalized;
@@ -410,6 +419,18 @@ namespace FishingMiniGame.Core
             Current.V2BehaviorState = behavior.State;
             Current.V2FishForceNormalized = FishingMath.Clamp01(behavior.ForceNormalized);
             Current.V2FishDirectionNormalized = FishingMath.Clamp(behavior.DirectionNormalized, -1f, 1f);
+            Current.AIStaminaBand = aiOutput.StaminaBand;
+            Current.AIPhaseRemainingSeconds = aiOutput.PhaseRemainingSeconds;
+            Current.IsRunTelegraphing = aiOutput.IsRunTelegraphing;
+            Current.RunTelegraphDirectionNormalized = aiOutput.RunTelegraphDirectionNormalized;
+            Current.RunTelegraphRemainingSeconds = aiOutput.RunTelegraphRemainingSeconds;
+            Current.HeadShakeActive = aiOutput.HeadShakeActive;
+            Current.HeadShakeIntensityNormalized = aiOutput.HeadShakeIntensityNormalized;
+            Current.HeadShakeEventSequence = aiOutput.HeadShakeEventSequence;
+            Current.FinalRunDecisionMade = aiOutput.FinalRunDecisionMade;
+            Current.FinalRunPending = aiOutput.FinalRunPending;
+            Current.IsFinalRun = aiOutput.IsFinalRun;
+            Current.FinalRunUsed = aiOutput.FinalRunUsed;
 
             Current.FishHealth = Current.FishMaxHealth * Current.FishStaminaNormalized;
             Current.LineDurability = 100f * (1f - Current.BreakStressNormalized);
@@ -418,10 +439,20 @@ namespace FishingMiniGame.Core
             Current.SlackDangerNormalized = Current.HookLooseRiskNormalized;
             Current.HighTensionDangerNormalized = Current.BreakStressNormalized;
             Current.DirectionalControlNormalized = Current.RodResponseQualityNormalized;
+            Current.FightPhaseRemainingSeconds = aiOutput.PhaseRemainingSeconds;
+            Current.FightDirection = behavior.DirectionNormalized;
+            Current.Feedback = new FishingFeedbackFrame(
+                ToFeedbackState(behavior.State), behavior.ForceNormalized);
         }
 
         private string BuildV2FightHint()
         {
+            if (Current.IsRunTelegraphing)
+            {
+                return Current.RunTelegraphDirectionNormalized < 0f
+                    ? "RUN INCOMING LEFT"
+                    : "RUN INCOMING RIGHT";
+            }
             if (Current.VirtualTensionZone == FishingV2TensionZone.Slack)
             {
                 return "SLACK! Raise the rod and restore line pressure";
@@ -440,7 +471,18 @@ namespace FishingMiniGame.Core
             {
                 return "Fish is resting - reel while pressure is safe";
             }
+            if (Current.HeadShakeActive)
+            {
+                return "HEAD SHAKE - steady the rod through the tension bump";
+            }
             return "Keep a moderate rod angle and reel through stable pressure";
+        }
+
+        private static FishingFeedbackState ToFeedbackState(FishingV2BehaviorState state)
+        {
+            if (state == FishingV2BehaviorState.Run) return FishingFeedbackState.Run;
+            if (state == FishingV2BehaviorState.Rest) return FishingFeedbackState.Rest;
+            return FishingFeedbackState.Fight;
         }
 
         private void TickOutcome()
@@ -634,7 +676,17 @@ namespace FishingMiniGame.Core
             if (_useV2FightModel && _v2FightModel != null)
             {
                 _v2FightModel.Reset(_v2FightTuning);
-                SyncV2Snapshot(new FishingV2BehaviorSample(FishingV2BehaviorState.None, 0f, 0f));
+                _v2FishAI.Reset(_v2FishAITuning, _v2AISeed + _cycleNumber, _fish.PullStrength);
+                _v2FishAIOutput = _v2FishAI.Current;
+                Current.FishDistanceMeters = _v2FightModel.FishDistanceMeters;
+                Current.FishStaminaNormalized = _v2FightModel.FishStaminaNormalized;
+                Current.VirtualLineTensionNormalized = _v2FightModel.VirtualLineTensionNormalized;
+                Current.BreakStressNormalized = _v2FightModel.BreakStressNormalized;
+                Current.HookLooseRiskNormalized = _v2FightModel.HookLooseRiskNormalized;
+                Current.RodResponseQualityNormalized = _v2FightModel.RodResponseQualityNormalized;
+                Current.ReelEfficiencyNormalized = _v2FightModel.ReelEfficiencyNormalized;
+                Current.VirtualTensionZone = _v2FightModel.TensionZone;
+                ClearV2AIFields();
             }
             else
             {
@@ -649,6 +701,7 @@ namespace FishingMiniGame.Core
                 Current.VirtualTensionZone = FishingV2TensionZone.Good;
                 Current.V2FishForceNormalized = 0f;
                 Current.V2FishDirectionNormalized = 0f;
+                ClearV2AIFields();
             }
             Current.FishId = _fish.FishId;
             Current.FishDisplayName = _fish.DisplayName;
@@ -658,6 +711,25 @@ namespace FishingMiniGame.Core
             Current.EscapeReason = FishingEscapeReason.None;
             Current.IsNibbling = false;
             Current.FalseStrikeCount = 0;
+        }
+
+        private void ClearV2AIFields()
+        {
+            Current.V2BehaviorState = FishingV2BehaviorState.None;
+            Current.V2FishForceNormalized = 0f;
+            Current.V2FishDirectionNormalized = 0f;
+            Current.AIStaminaBand = FishingV2StaminaBand.High;
+            Current.AIPhaseRemainingSeconds = 0f;
+            Current.IsRunTelegraphing = false;
+            Current.RunTelegraphDirectionNormalized = 0f;
+            Current.RunTelegraphRemainingSeconds = 0f;
+            Current.HeadShakeActive = false;
+            Current.HeadShakeIntensityNormalized = 0f;
+            Current.HeadShakeEventSequence = 0;
+            Current.FinalRunDecisionMade = false;
+            Current.FinalRunPending = false;
+            Current.IsFinalRun = false;
+            Current.FinalRunUsed = false;
         }
 
         private static float SanitizeNormalized(float value)

@@ -60,6 +60,7 @@ namespace FishingMiniGame.Runtime
         private float _alertUntil;
         private bool _debugVisible;
         private bool _lastNibbling;
+        private bool _lastRunTelegraphing;
         private bool _built;
         private FishingStandaloneBootstrap _standaloneBootstrap;
 
@@ -93,7 +94,8 @@ namespace FishingMiniGame.Runtime
             }
 
             _canvasRoot.SetActive(true);
-            if (Input.GetKeyDown(KeyCode.F3)) _debugVisible = !_debugVisible;
+            if (Input.GetKeyDown(KeyCode.F1) || Input.GetKeyDown(KeyCode.F3))
+                _debugVisible = !_debugVisible;
             Refresh(controller.Snapshot, controller.RoundSnapshot, controller.SessionSnapshot);
             if (_startPanel != null && _startPanel.activeSelf) UpdateStartBackdropCrop();
         }
@@ -235,6 +237,12 @@ namespace FishingMiniGame.Runtime
         {
             if (singleSession)
             {
+                if (snapshot.IsRunTelegraphing)
+                {
+                    return snapshot.RunTelegraphDirectionNormalized < 0f
+                        ? "RUN INCOMING LEFT — prepare to follow LEFT"
+                        : "RUN INCOMING RIGHT — prepare to follow RIGHT";
+                }
                 if (snapshot.VirtualTensionZone == FishingV2TensionZone.Slack)
                     return "SLACK — raise the rod and restore pressure";
                 if (snapshot.VirtualTensionZone == FishingV2TensionZone.Danger)
@@ -301,6 +309,16 @@ namespace FishingMiniGame.Runtime
                 }
             }
 
+            if (singleSession && snapshot.State == FishingPlayerState.Fighting &&
+                snapshot.IsRunTelegraphing && !_lastRunTelegraphing)
+            {
+                ShowAlert(snapshot.RunTelegraphDirectionNormalized < 0f
+                    ? "RUN INCOMING LEFT"
+                    : "RUN INCOMING RIGHT", Coral, snapshot.RunTelegraphRemainingSeconds);
+            }
+            _lastRunTelegraphing = snapshot.State == FishingPlayerState.Fighting &&
+                snapshot.IsRunTelegraphing;
+
             if (snapshot.IsNibbling && !_lastNibbling)
             {
                 ShowAlert("NIBBLE... WAIT", TextSecondary, 0.55f);
@@ -357,7 +375,7 @@ namespace FishingMiniGame.Runtime
                 ? $"Session     {session.State} / retry {session.PreHookFailureCount}"
                 : $"Round       {round.State}";
             _debugText.text =
-                "DEVELOPER OVERLAY  [F3]\n" +
+                "DEVELOPER OVERLAY  [F1 / F3]\n" +
                 flow + "\n" +
                 $"Player      {snapshot.State}\n" +
                 $"Fish ID     {snapshot.FishId}\n" +
@@ -377,6 +395,10 @@ namespace FishingMiniGame.Runtime
             {
                 _debugText.text +=
                     $"\nV2 sample   {snapshot.V2BehaviorState} force {snapshot.V2FishForceNormalized:0.00} dir {snapshot.V2FishDirectionNormalized:+0.00;-0.00;0.00}" +
+                    $"\nAI band     {snapshot.AIStaminaBand} / phase {snapshot.AIPhaseRemainingSeconds:0.00}s" +
+                    $"\nTelegraph   {snapshot.IsRunTelegraphing} dir {snapshot.RunTelegraphDirectionNormalized:+0;-0;0} / {snapshot.RunTelegraphRemainingSeconds:0.00}s" +
+                    $"\nHead shake  {snapshot.HeadShakeActive} intensity {snapshot.HeadShakeIntensityNormalized:0.00} / seq {snapshot.HeadShakeEventSequence}" +
+                    $"\nFinal run   decided {snapshot.FinalRunDecisionMade} / pending {snapshot.FinalRunPending} / active {snapshot.IsFinalRun} / used {snapshot.FinalRunUsed}" +
                     $"\nDistance    {snapshot.FishDistanceMeters:0.00} m" +
                     $"\nStamina     {snapshot.FishStaminaNormalized:0.00}" +
                     $"\nVirtual T   {snapshot.VirtualLineTensionNormalized:0.00} / {snapshot.VirtualTensionZone}" +
@@ -773,6 +795,12 @@ namespace FishingMiniGame.Runtime
         {
             if (snapshot.State == FishingPlayerState.Waiting && snapshot.IsNibbling) return "FISH MOVE  •  LIGHT NIBBLE — WAIT";
             if (snapshot.State != FishingPlayerState.Fighting) return "FISH MOVE  •  WAITING FOR HOOK";
+            if (snapshot.IsRunTelegraphing)
+            {
+                return snapshot.RunTelegraphDirectionNormalized < 0f
+                    ? $"FISH MOVE  •  RUN INCOMING LEFT  {snapshot.RunTelegraphRemainingSeconds:0.0}s"
+                    : $"FISH MOVE  •  RUN INCOMING RIGHT  {snapshot.RunTelegraphRemainingSeconds:0.0}s";
+            }
             if (snapshot.Feedback.State == FishingFeedbackState.Run)
             {
                 return snapshot.FightDirection < 0f
@@ -786,6 +814,7 @@ namespace FishingMiniGame.Runtime
         private static Color BehaviorColor(FishingSnapshot snapshot)
         {
             if (snapshot.State == FishingPlayerState.Waiting && snapshot.IsNibbling) return TextSecondary;
+            if (snapshot.IsRunTelegraphing) return Coral;
             if (snapshot.Feedback.State == FishingFeedbackState.Run) return Coral;
             if (snapshot.Feedback.State == FishingFeedbackState.Rest) return Aqua;
             if (snapshot.Feedback.State == FishingFeedbackState.Fight) return Gold;

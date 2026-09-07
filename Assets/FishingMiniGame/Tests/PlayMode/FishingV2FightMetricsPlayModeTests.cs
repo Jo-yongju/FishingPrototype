@@ -58,7 +58,16 @@ namespace FishingMiniGame.Tests
             while (fixture.Controller.Snapshot.State == FishingPlayerState.Fighting &&
                    Time.realtimeSinceStartup < deadline)
             {
-                fixture.Input.SetNextFrame(Frame(reel: 1f, rodPitch: 0.35f));
+                FishingSnapshot snapshot = fixture.Controller.Snapshot;
+                bool preparingForRun = snapshot.IsRunTelegraphing;
+                bool running = snapshot.V2BehaviorState == FishingV2BehaviorState.Run;
+                float direction = preparingForRun
+                    ? snapshot.RunTelegraphDirectionNormalized
+                    : snapshot.V2FishDirectionNormalized;
+                fixture.Input.SetNextFrame(Frame(
+                    reel: preparingForRun || running ? 0f : 1f,
+                    rodPitch: 0.35f,
+                    rodYaw: preparingForRun || running ? direction : 0f));
                 yield return null;
             }
 
