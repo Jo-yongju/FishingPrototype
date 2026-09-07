@@ -161,8 +161,9 @@ namespace FishingMiniGame.Runtime
             _timerLabelText.text = singleSession ? "SESSION ELAPSED" : "TIME LEFT";
             _timerText.text = FormatTime(singleSession ? session.ElapsedSeconds : round.RemainingSeconds);
             _scoreText.text = (singleSession ? snapshot.TotalScore : round.TotalScore).ToString("N0");
+            int preFightRetries = snapshot.EarlyHookCount + snapshot.MissedBiteRetryCount;
             _catchText.text = singleSession
-                ? $"ONE FISH SESSION  /  {session.PreHookFailureCount} RETRIES"
+                ? $"ONE FISH SESSION  /  {preFightRetries} RETRIES"
                 : $"{round.CaughtCount} CAUGHT  /  {round.Attempts} ATTEMPTS";
             _fishText.text = string.IsNullOrWhiteSpace(snapshot.FishDisplayName) ? "UNKNOWN FISH" : snapshot.FishDisplayName.ToUpperInvariant();
             _difficultyText.text = string.IsNullOrWhiteSpace(snapshot.DifficultyLabel) ? "NORMAL" : snapshot.DifficultyLabel.ToUpperInvariant();
@@ -208,7 +209,10 @@ namespace FishingMiniGame.Runtime
                     SetGuidance("CHARGING CAST", "Release SPACE at the power you want");
                     break;
                 case FishingPlayerState.Waiting:
-                    SetGuidance("WATCH THE FLOAT", "Wait for the bite signal — do not press early");
+                    if (snapshot.IsNibbling)
+                        SetGuidance("NIBBLE...", "Wait — this is not the committed bite");
+                    else
+                        SetGuidance("WATCH THE FLOAT", "Wait for the bite signal — do not press early");
                     break;
                 case FishingPlayerState.BiteWindow:
                     SetGuidance("BITE!", "Press F now to set the hook");
@@ -349,9 +353,11 @@ namespace FishingMiniGame.Runtime
         {
             if (singleSession)
             {
-                _recentCatchText.text = session.PreHookFailureCount == 0
+                int retryCount = controller.Snapshot.EarlyHookCount +
+                    controller.Snapshot.MissedBiteRetryCount;
+                _recentCatchText.text = retryCount == 0
                     ? "ONE TARGET  •  LAND IT TO COMPLETE THE SESSION"
-                    : $"SAME TARGET  •  RETRY {session.PreHookFailureCount + 1}";
+                    : $"SAME TARGET  •  RETRY {retryCount + 1}";
                 return;
             }
 
@@ -372,14 +378,16 @@ namespace FishingMiniGame.Runtime
         {
             FishingFeedbackFrame feedback = controller.LastFeedback;
             string flow = controller.Mode == FishingGameMode.SingleFishSession
-                ? $"Session     {session.State} / retry {session.PreHookFailureCount}"
+                ? $"Session     {session.State}"
                 : $"Round       {round.State}";
             _debugText.text =
                 "DEVELOPER OVERLAY  [F1 / F3]\n" +
+                $"Mode        {(controller.Mode == FishingGameMode.SingleFishSession ? "V2" : "Legacy")}\n" +
                 flow + "\n" +
                 $"Player      {snapshot.State}\n" +
                 $"Fish ID     {snapshot.FishId}\n" +
                 $"State time  {snapshot.StateElapsedSeconds:0.00}s\n" +
+                $"Cast power  {snapshot.CastPower:0.00}\n" +
                 $"Bite left   {snapshot.BiteDelayRemainingSeconds:0.00}s\n" +
                 $"Hook left   {snapshot.HookWindowRemainingSeconds:0.00}s\n" +
                 (controller.Mode == FishingGameMode.SingleFishSession
@@ -394,6 +402,9 @@ namespace FishingMiniGame.Runtime
             if (controller.Mode == FishingGameMode.SingleFishSession)
             {
                 _debugText.text +=
+                    $"\nNibble      {snapshot.IsNibbling} / {snapshot.NibbleRemainingSeconds:0.00}s / intensity {snapshot.NibbleIntensityNormalized:0.00} / seq {snapshot.NibbleEventSequence}" +
+                    $"\nBite seq    {snapshot.BiteEventSequence}" +
+                    $"\nRetries     early {snapshot.EarlyHookCount} / missed {snapshot.MissedBiteRetryCount}" +
                     $"\nV2 sample   {snapshot.V2BehaviorState} force {snapshot.V2FishForceNormalized:0.00} dir {snapshot.V2FishDirectionNormalized:+0.00;-0.00;0.00}" +
                     $"\nAI band     {snapshot.AIStaminaBand} / phase {snapshot.AIPhaseRemainingSeconds:0.00}s" +
                     $"\nTelegraph   {snapshot.IsRunTelegraphing} dir {snapshot.RunTelegraphDirectionNormalized:+0;-0;0} / {snapshot.RunTelegraphRemainingSeconds:0.00}s" +

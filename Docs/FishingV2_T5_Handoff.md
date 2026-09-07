@@ -1,6 +1,46 @@
-# Fishing V2 T5 Handoff
+# Fishing V2 T6 Presentation Handoff
 
-T4 establishes one authoritative SingleFish V2 fight pipeline:
+T5 establishes a device-agnostic SingleFish V2 pre-fight flow before the
+existing T4 fight pipeline:
+
+```text
+CastPressed / CastReleased
+    -> Waiting attempt
+    -> Nibble event + observed active duration
+    -> observed post-nibble gap
+    -> Bite event / BiteWindow
+    -> HookPressed
+    -> Hooked
+    -> Fighting
+```
+
+`FishingStateMachine` consumes semantic `FishingInputFrame` values only. It
+does not know whether they came from keyboard, mock input, IMU, serial, or a
+future network adapter.
+
+## Pre-fight snapshot contract
+
+- Nibble active state: `IsNibbling`, `NibbleRemainingSeconds`,
+  `NibbleIntensityNormalized`.
+- Nibble one-shot signal: `NibbleEventSequence` increments exactly once when a
+  new nibble begins.
+- Bite one-shot signal: `BiteEventSequence` increments exactly once on entry to
+  `BiteWindow`.
+- Hook timing: `HookWindowRemainingSeconds`.
+- Same-fish retry counters: `EarlyHookCount`, `MissedBiteRetryCount`.
+
+Consumers should detect a new one-shot event by comparing the current sequence
+with their last consumed sequence. A reset to zero means a new fish/cycle; it is
+not an event.
+
+Every V2 bite is preceded by one observed nibble. The bite gate is based on the
+actual observed nibble end, so a coarse frame cannot collapse nibble start,
+nibble duration, post-nibble gap, and bite into one update. Early hooks and
+missed bites start a new schedule for the same fish without `CycleFinished`.
+
+## Existing fight pipeline
+
+T4 remains the single authoritative fight pipeline:
 
 ```text
 FishingV2FishAI
@@ -32,10 +72,7 @@ For pulse-style consumers, a Head Shake is new only when
 the consumer value to `0` when a new fish fight starts. A reset from a prior
 sequence to `0` is not an event.
 
-## T5 boundary
-
-T5 may implement Cast -> Nibble -> Bite -> Hook V2 before this pipeline. It
-must not redesign the fish AI or feed `FishingFeedbackState` back into it.
-Future presentation can map telegraph/head-shake/final-run signals to visual
-effects, and future force-feedback can map the head-shake sequence to a torque
-pulse without changing the pure AI.
+T6 presentation must consume these snapshot signals without changing Core
+state, retry schedules, AI behavior, or fight metrics. Visual rod bend, line,
+splash, bite reaction, head-shake animation, and camera reaction remain T6
+work. Hardware feedback and device adapters remain later boundaries.

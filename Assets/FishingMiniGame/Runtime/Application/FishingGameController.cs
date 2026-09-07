@@ -302,6 +302,10 @@ namespace FishingMiniGame.Runtime
                 Seed = _launchContext.Seed,
                 Rules = _baseRules,
                 Fish = firstFish,
+                UseV2PreFightFlow = _gameMode == FishingGameMode.SingleFishSession,
+                V2PreFightTuning = config != null
+                    ? config.BuildV2PreFightTuning()
+                    : new FishingV2PreFightTuning(),
                 UseV2FightModel = _gameMode == FishingGameMode.SingleFishSession,
                 V2FightTuning = new FishingV2FightTuning(),
                 V2FishAITuning = new FishingV2FishAITuning()

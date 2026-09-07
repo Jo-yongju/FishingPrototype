@@ -126,6 +126,17 @@ namespace FishingMiniGame.Runtime
         [SerializeField, Min(0.05f)] private float hookWindowSeconds = 0.9f;
         [SerializeField, Min(0f)] private float hookSettleSeconds = 0.35f;
 
+        [Header("Fishing V2 pre-fight")]
+        [SerializeField, Min(0f)] private float nibbleLeadMinSeconds = 0.65f;
+        [SerializeField, Min(0f)] private float nibbleLeadMaxSeconds = 1f;
+        [SerializeField, Min(0.01f)] private float nibbleDurationSeconds = 0.28f;
+        [SerializeField, Min(0f)] private float nibbleToBiteGapSeconds = 0.18f;
+        [SerializeField, Range(0f, 1f)] private float nibbleIntensityNormalized = 0.28f;
+        [SerializeField, Min(0f)] private float earlyHookPenaltyMinSeconds = 0.6f;
+        [SerializeField, Min(0f)] private float earlyHookPenaltyMaxSeconds = 1f;
+        [SerializeField, Min(0.01f)] private float missedBiteRetryMinSeconds = 0.75f;
+        [SerializeField, Min(0.01f)] private float missedBiteRetryMaxSeconds = 1.2f;
+
         [Header("Fight")]
         [SerializeField, Range(0f, 1f)] private float safeTensionMin = 0.30f;
         [SerializeField, Range(0f, 1f)] private float safeTensionMax = 0.75f;
@@ -169,6 +180,24 @@ namespace FishingMiniGame.Runtime
                 OutcomeDisplaySeconds = outcomeDisplaySeconds,
                 CooldownSeconds = cooldownSeconds
             };
+        }
+
+        public FishingV2PreFightTuning BuildV2PreFightTuning()
+        {
+            FishingV2PreFightTuning tuning = new FishingV2PreFightTuning
+            {
+                NibbleLeadMinSeconds = nibbleLeadMinSeconds,
+                NibbleLeadMaxSeconds = nibbleLeadMaxSeconds,
+                NibbleDurationSeconds = nibbleDurationSeconds,
+                NibbleToBiteGapSeconds = nibbleToBiteGapSeconds,
+                NibbleIntensityNormalized = nibbleIntensityNormalized,
+                EarlyHookPenaltyMinSeconds = earlyHookPenaltyMinSeconds,
+                EarlyHookPenaltyMaxSeconds = earlyHookPenaltyMaxSeconds,
+                MissedBiteRetryMinSeconds = missedBiteRetryMinSeconds,
+                MissedBiteRetryMaxSeconds = missedBiteRetryMaxSeconds
+            };
+            tuning.Sanitize();
+            return tuning;
         }
 
         public FishProfile[] BuildFishProfiles()

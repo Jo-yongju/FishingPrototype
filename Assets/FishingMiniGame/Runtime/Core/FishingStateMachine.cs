@@ -17,6 +17,15 @@ namespace FishingMiniGame.Core
         private float _nibbleUntil;
         private float _earlyStrikeHintUntil;
         private int _falseStrikeCount;
+        private bool _useV2PreFightFlow;
+        private FishingV2PreFightTuning _v2PreFightTuning;
+        private float _v2ScheduledNibbleStartTime;
+        private float _v2ScheduledBiteTime;
+        private float _v2EarliestBiteAllowedTime;
+        private float _v2NibbleRemaining;
+        private float _v2ActualNibbleStartTime;
+        private float _v2ActualNibbleEndTime;
+        private bool _v2NibbleStarted;
         private FishingFeedbackState _fightPhase;
         private float _fightPhaseRemaining;
         private float _fightPhaseDuration;
@@ -48,6 +57,9 @@ namespace FishingMiniGame.Core
 
             _baseRules = (context.Rules ?? new FishingRules()).Copy();
             _fish = (context.Fish ?? new FishProfile()).Copy();
+            _useV2PreFightFlow = context.UseV2PreFightFlow;
+            _v2PreFightTuning = (context.V2PreFightTuning ?? new FishingV2PreFightTuning()).Copy();
+            _v2PreFightTuning.Sanitize();
             _useV2FightModel = context.UseV2FightModel;
             _v2AISeed = context.Seed;
             _v2FightTuning = (context.V2FightTuning ?? new FishingV2FightTuning()).Copy();
@@ -115,7 +127,7 @@ namespace FishingMiniGame.Core
                     TickCasting(input);
                     break;
                 case FishingPlayerState.Waiting:
-                    TickWaiting(input);
+                    TickWaiting(input, dt);
                     break;
                 case FishingPlayerState.BiteWindow:
                     TickBiteWindow(input);
@@ -162,11 +174,22 @@ namespace FishingMiniGame.Core
             Current.Hint = "Release SPACE to cast";
             if (input.CastReleased || Current.CastPower >= 1f)
             {
-                BeginWaiting();
+                if (_useV2PreFightFlow)
+                    BeginV2WaitingAttempt(FishingV2WaitingAttemptReason.Initial);
+                else
+                    BeginLegacyWaiting();
             }
         }
 
-        private void TickWaiting(FishingInputFrame input)
+        private void TickWaiting(FishingInputFrame input, float dt)
+        {
+            if (_useV2PreFightFlow)
+                TickV2Waiting(input, dt);
+            else
+                TickLegacyWaiting(input);
+        }
+
+        private void TickLegacyWaiting(FishingInputFrame input)
         {
             Current.BiteDelayRemainingSeconds = FishingMath.Max(0f, _biteDelay - _stateElapsed);
             Current.IsNibbling = _nibbleAt >= 0f && _stateElapsed >= _nibbleAt && _stateElapsed <= _nibbleUntil;
@@ -209,6 +232,62 @@ namespace FishingMiniGame.Core
             }
         }
 
+        private void TickV2Waiting(FishingInputFrame input, float dt)
+        {
+            UpdateV2BiteDelayRemaining();
+
+            if (!_v2NibbleStarted && _stateElapsed >= _v2ScheduledNibbleStartTime)
+            {
+                StartV2Nibble();
+                return;
+            }
+
+            if (Current.IsNibbling)
+            {
+                if (input.HookPressed)
+                {
+                    HandleV2EarlyHook();
+                    return;
+                }
+
+                _v2NibbleRemaining = FishingMath.Max(0f, _v2NibbleRemaining - dt);
+                Current.NibbleRemainingSeconds = _v2NibbleRemaining;
+                Current.Hint = "NIBBLE... wait";
+                Current.Feedback = new FishingFeedbackFrame(
+                    FishingFeedbackState.Bite, Current.NibbleIntensityNormalized);
+
+                if (_v2NibbleRemaining > 0f)
+                {
+                    return;
+                }
+
+                // The active window ends when consumers can actually observe it ending.
+                // Starting the gap here prevents a coarse Tick from consuming the active
+                // duration and the post-nibble gap in the same update.
+                Current.IsNibbling = false;
+                Current.NibbleRemainingSeconds = 0f;
+                Current.NibbleIntensityNormalized = 0f;
+                _v2ActualNibbleEndTime = _stateElapsed;
+                _v2EarliestBiteAllowedTime = FishingMath.Max(
+                    _v2ScheduledBiteTime,
+                    _v2ActualNibbleEndTime + _v2PreFightTuning.NibbleToBiteGapSeconds);
+                Current.Hint = "Wait for a bite...";
+                Current.Feedback = new FishingFeedbackFrame(FishingFeedbackState.None, 0f);
+                UpdateV2BiteDelayRemaining();
+                return;
+            }
+
+            if (_v2NibbleStarted && _stateElapsed >= _v2EarliestBiteAllowedTime)
+            {
+                BeginV2BiteWindow();
+                return;
+            }
+
+            Current.Hint = "Wait for a bite...";
+            Current.Feedback = new FishingFeedbackFrame(FishingFeedbackState.None, 0f);
+            if (input.HookPressed) HandleV2EarlyHook();
+        }
+
         private void TickBiteWindow(FishingInputFrame input)
         {
             Current.HookWindowRemainingSeconds = FishingMath.Max(0f, _rules.HookWindowSeconds - _stateElapsed);
@@ -218,11 +297,20 @@ namespace FishingMiniGame.Core
 
             if (input.HookPressed)
             {
+                if (_useV2PreFightFlow) ClearV2AttemptSchedule();
                 TransitionTo(FishingPlayerState.Hooked);
             }
             else if (_stateElapsed >= _rules.HookWindowSeconds)
             {
-                Escape(FishingEscapeReason.MissedBite, "The fish stole the bait");
+                if (_useV2PreFightFlow)
+                {
+                    Current.MissedBiteRetryCount++;
+                    BeginV2WaitingAttempt(FishingV2WaitingAttemptReason.MissedBite);
+                }
+                else
+                {
+                    Escape(FishingEscapeReason.MissedBite, "The fish stole the bait");
+                }
             }
         }
 
@@ -503,13 +591,126 @@ namespace FishingMiniGame.Core
             }
         }
 
-        private void BeginWaiting()
+        private void BeginLegacyWaiting()
         {
             double range = _rules.MaxBiteDelaySeconds - _rules.MinBiteDelaySeconds;
             _biteDelay = _rules.MinBiteDelaySeconds + ((float)_random.NextDouble() * (float)range);
             ScheduleNibble(0.15f);
             Current.BiteDelayRemainingSeconds = _biteDelay;
             TransitionTo(FishingPlayerState.Waiting);
+        }
+
+        private void BeginV2WaitingAttempt(FishingV2WaitingAttemptReason reason)
+        {
+            ClearV2AttemptSchedule();
+
+            float rawBiteDelay;
+            if (reason == FishingV2WaitingAttemptReason.MissedBite)
+            {
+                rawBiteDelay = RandomRange(
+                    _v2PreFightTuning.MissedBiteRetryMinSeconds,
+                    _v2PreFightTuning.MissedBiteRetryMaxSeconds);
+            }
+            else
+            {
+                rawBiteDelay = RandomRange(
+                    _rules.MinBiteDelaySeconds,
+                    _rules.MaxBiteDelaySeconds);
+                if (reason == FishingV2WaitingAttemptReason.EarlyHook)
+                {
+                    rawBiteDelay += RandomRange(
+                        _v2PreFightTuning.EarlyHookPenaltyMinSeconds,
+                        _v2PreFightTuning.EarlyHookPenaltyMaxSeconds);
+                }
+            }
+
+            float lead = RandomRange(
+                _v2PreFightTuning.NibbleLeadMinSeconds,
+                _v2PreFightTuning.NibbleLeadMaxSeconds);
+            _v2ScheduledNibbleStartTime = FishingMath.Max(0f, rawBiteDelay - lead);
+            _v2ScheduledBiteTime = FishingMath.Max(
+                rawBiteDelay,
+                _v2ScheduledNibbleStartTime +
+                _v2PreFightTuning.NibbleDurationSeconds +
+                _v2PreFightTuning.NibbleToBiteGapSeconds);
+            _v2EarliestBiteAllowedTime = _v2ScheduledBiteTime;
+            _biteDelay = _v2ScheduledBiteTime;
+
+            TransitionTo(FishingPlayerState.Waiting);
+            Current.BiteDelayRemainingSeconds = _v2EarliestBiteAllowedTime;
+            if (reason == FishingV2WaitingAttemptReason.EarlyHook)
+                Current.Hint = "Too early - wait for the bite";
+            else if (reason == FishingV2WaitingAttemptReason.MissedBite)
+                Current.Hint = "Missed! Wait for another bite";
+            else
+                Current.Hint = "Wait for a bite...";
+        }
+
+        private void StartV2Nibble()
+        {
+            _v2NibbleStarted = true;
+            _v2ActualNibbleStartTime = _stateElapsed;
+            _v2ActualNibbleEndTime = -1f;
+            _v2NibbleRemaining = _v2PreFightTuning.NibbleDurationSeconds;
+            _v2EarliestBiteAllowedTime = FishingMath.Max(
+                _v2ScheduledBiteTime,
+                _v2ActualNibbleStartTime +
+                _v2PreFightTuning.NibbleDurationSeconds +
+                _v2PreFightTuning.NibbleToBiteGapSeconds);
+            Current.IsNibbling = true;
+            Current.NibbleRemainingSeconds = _v2NibbleRemaining;
+            Current.NibbleIntensityNormalized = _v2PreFightTuning.NibbleIntensityNormalized;
+            Current.NibbleEventSequence++;
+            Current.Hint = "NIBBLE... wait";
+            Current.Feedback = new FishingFeedbackFrame(
+                FishingFeedbackState.Bite, Current.NibbleIntensityNormalized);
+            UpdateV2BiteDelayRemaining();
+        }
+
+        private void BeginV2BiteWindow()
+        {
+            Current.IsNibbling = false;
+            Current.NibbleRemainingSeconds = 0f;
+            Current.NibbleIntensityNormalized = 0f;
+            Current.BiteDelayRemainingSeconds = 0f;
+            Current.HookWindowRemainingSeconds = _rules.HookWindowSeconds;
+            Current.BiteEventSequence++;
+            Current.Hint = "BITE! HOOK NOW";
+            Current.Feedback = new FishingFeedbackFrame(FishingFeedbackState.Bite, 1f);
+            TransitionTo(FishingPlayerState.BiteWindow);
+        }
+
+        private void HandleV2EarlyHook()
+        {
+            Current.EarlyHookCount++;
+            BeginV2WaitingAttempt(FishingV2WaitingAttemptReason.EarlyHook);
+        }
+
+        private void UpdateV2BiteDelayRemaining()
+        {
+            Current.BiteDelayRemainingSeconds = FishingMath.Max(
+                0f, _v2EarliestBiteAllowedTime - _stateElapsed);
+        }
+
+        private void ClearV2AttemptSchedule()
+        {
+            _v2ScheduledNibbleStartTime = -1f;
+            _v2ScheduledBiteTime = -1f;
+            _v2EarliestBiteAllowedTime = -1f;
+            _v2NibbleRemaining = 0f;
+            _v2ActualNibbleStartTime = -1f;
+            _v2ActualNibbleEndTime = -1f;
+            _v2NibbleStarted = false;
+            Current.IsNibbling = false;
+            Current.NibbleRemainingSeconds = 0f;
+            Current.NibbleIntensityNormalized = 0f;
+            Current.HookWindowRemainingSeconds = 0f;
+        }
+
+        private float RandomRange(float minimum, float maximum)
+        {
+            if (maximum <= minimum) return minimum;
+            return minimum + (float)_random.NextDouble() * (maximum - minimum);
         }
 
         private void ScheduleNibble(float earliestTime)
@@ -650,6 +851,13 @@ namespace FishingMiniGame.Core
             _nibbleUntil = -1f;
             _earlyStrikeHintUntil = -1f;
             _falseStrikeCount = 0;
+            _v2ScheduledNibbleStartTime = -1f;
+            _v2ScheduledBiteTime = -1f;
+            _v2EarliestBiteAllowedTime = -1f;
+            _v2NibbleRemaining = 0f;
+            _v2ActualNibbleStartTime = -1f;
+            _v2ActualNibbleEndTime = -1f;
+            _v2NibbleStarted = false;
             _fightPhase = FishingFeedbackState.None;
             _fightPhaseRemaining = 0f;
             _fightPhaseDuration = 0f;
@@ -710,6 +918,12 @@ namespace FishingMiniGame.Core
             Current.Feedback = new FishingFeedbackFrame(FishingFeedbackState.None, 0f);
             Current.EscapeReason = FishingEscapeReason.None;
             Current.IsNibbling = false;
+            Current.NibbleEventSequence = 0;
+            Current.NibbleRemainingSeconds = 0f;
+            Current.NibbleIntensityNormalized = 0f;
+            Current.BiteEventSequence = 0;
+            Current.EarlyHookCount = 0;
+            Current.MissedBiteRetryCount = 0;
             Current.FalseStrikeCount = 0;
         }
 

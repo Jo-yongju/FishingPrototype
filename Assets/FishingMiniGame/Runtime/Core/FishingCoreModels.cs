@@ -245,6 +245,12 @@ namespace FishingMiniGame.Core
         public FishingFeedbackFrame Feedback { get; internal set; }
         public FishingEscapeReason EscapeReason { get; internal set; }
         public bool IsNibbling { get; internal set; }
+        public int NibbleEventSequence { get; internal set; }
+        public float NibbleRemainingSeconds { get; internal set; }
+        public float NibbleIntensityNormalized { get; internal set; }
+        public int BiteEventSequence { get; internal set; }
+        public int EarlyHookCount { get; internal set; }
+        public int MissedBiteRetryCount { get; internal set; }
         public int FalseStrikeCount { get; internal set; }
     }
 
@@ -254,6 +260,8 @@ namespace FishingMiniGame.Core
         public int Seed = 20260821;
         public FishingRules Rules = new FishingRules();
         public FishProfile Fish = new FishProfile();
+        public bool UseV2PreFightFlow;
+        public FishingV2PreFightTuning V2PreFightTuning = new FishingV2PreFightTuning();
         public bool UseV2FightModel;
         public FishingV2FightTuning V2FightTuning = new FishingV2FightTuning();
         public FishingV2FishAITuning V2FishAITuning = new FishingV2FishAITuning();

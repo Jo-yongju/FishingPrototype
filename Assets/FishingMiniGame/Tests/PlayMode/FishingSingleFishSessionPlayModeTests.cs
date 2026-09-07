@@ -12,6 +12,66 @@ namespace FishingMiniGame.Tests
     public sealed class FishingSingleFishSessionPlayModeTests
     {
         [UnityTest]
+        public IEnumerator PreFightFlow_IsObservableAndRetriesInFishingStandalone()
+        {
+            SessionFixture fixture = new SessionFixture();
+            yield return LoadSingleSession(fixture);
+            FishingGameController controller = fixture.Controller;
+            MockFishingInputSource input = new MockFishingInputSource();
+            controller.SetInputSource(input);
+            fixture.Facade.BeginRound();
+            yield return WaitUntilOrFail(
+                () => controller.SessionSnapshot.State == FishingSessionState.Playing &&
+                      controller.Snapshot.State == FishingPlayerState.Idle,
+                2f,
+                "The single-fish session did not become playable.");
+            string fishId = controller.Snapshot.FishId;
+
+            input.SetNextFrame(Frame(castPressed: true));
+            yield return null;
+            input.SetNextFrame(Frame(castReleased: true));
+            yield return null;
+            Assert.That(controller.Snapshot.State, Is.EqualTo(FishingPlayerState.Waiting));
+
+            input.SetNextFrame(Frame(hookPressed: true));
+            yield return null;
+            Assert.That(controller.Snapshot.EarlyHookCount, Is.EqualTo(1));
+            Assert.That(controller.Snapshot.FishId, Is.EqualTo(fishId));
+            Assert.That(controller.LastResult, Is.Null);
+
+            yield return WaitUntilOrFail(
+                () => controller.Snapshot.IsNibbling,
+                6f,
+                "The retry nibble was not observable.");
+            int firstObservedNibble = controller.Snapshot.NibbleEventSequence;
+            input.SetNextFrame(Frame(hookPressed: true));
+            yield return null;
+            Assert.That(controller.Snapshot.EarlyHookCount, Is.EqualTo(2));
+            Assert.That(controller.Snapshot.State, Is.EqualTo(FishingPlayerState.Waiting));
+            Assert.That(controller.Snapshot.FishId, Is.EqualTo(fishId));
+
+            yield return WaitUntilOrFail(
+                () => controller.Snapshot.NibbleEventSequence > firstObservedNibble,
+                6f,
+                "A fresh attempt did not produce another nibble.");
+            Assert.That(controller.Snapshot.State, Is.EqualTo(FishingPlayerState.Waiting));
+            yield return WaitUntilOrFail(
+                () => controller.Snapshot.State == FishingPlayerState.BiteWindow,
+                3f,
+                "The observed nibble did not progress to a committed bite.");
+            Assert.That(controller.Snapshot.BiteEventSequence, Is.EqualTo(1));
+
+            input.SetNextFrame(Frame(hookPressed: true));
+            yield return null;
+            Assert.That(controller.Snapshot.State, Is.EqualTo(FishingPlayerState.Hooked));
+            yield return WaitUntilOrFail(
+                () => controller.Snapshot.State == FishingPlayerState.Fighting,
+                2f,
+                "The successful hook did not hand off to Fighting.");
+            Assert.That(controller.Snapshot.V2BehaviorState, Is.EqualTo(FishingV2BehaviorState.Fight));
+        }
+
+        [UnityTest]
         public IEnumerator Catch_CompletesSessionAndDoesNotSelectNextFish()
         {
             SessionFixture fixture = new SessionFixture();
@@ -64,7 +124,7 @@ namespace FishingMiniGame.Tests
         }
 
         [UnityTest]
-        public IEnumerator MissedBite_IsRetryWithSameFishAndSessionStillPlaying()
+        public IEnumerator MissedBite_IsInPlaceRetryWithSameFishAndSessionStillPlaying()
         {
             SessionFixture fixture = new SessionFixture();
             yield return LoadSingleSession(fixture);
@@ -76,19 +136,22 @@ namespace FishingMiniGame.Tests
             facade.BeginRound();
 
             yield return CastAndWaitForBite(controller, input);
+            int firstNibbleSequence = controller.Snapshot.NibbleEventSequence;
             yield return WaitUntilOrFail(
-                () => controller.Snapshot.State == FishingPlayerState.Idle,
-                6f,
-                "A missed bite did not return to Idle for a retry.");
+                () => controller.Snapshot.MissedBiteRetryCount == 1,
+                3f,
+                "A missed bite did not start an in-place Waiting retry.");
 
             Assert.That(controller.SessionSnapshot.State, Is.EqualTo(FishingSessionState.Playing));
             Assert.That(controller.LastSessionResult, Is.Null);
-            Assert.That(controller.SessionSnapshot.PreHookFailureCount, Is.EqualTo(1));
+            Assert.That(controller.SessionSnapshot.PreHookFailureCount, Is.Zero);
+            Assert.That(controller.Snapshot.State, Is.EqualTo(FishingPlayerState.Waiting));
             Assert.That(controller.Snapshot.FishId, Is.EqualTo(fishId));
 
-            input.SetNextFrame(Frame(castPressed: true));
-            yield return null;
-            Assert.That(controller.Snapshot.State, Is.EqualTo(FishingPlayerState.Casting));
+            yield return WaitUntilOrFail(
+                () => controller.Snapshot.NibbleEventSequence > firstNibbleSequence,
+                3f,
+                "The missed-bite retry did not schedule a new nibble.");
             Assert.That(controller.Snapshot.FishId, Is.EqualTo(fishId));
         }
 
