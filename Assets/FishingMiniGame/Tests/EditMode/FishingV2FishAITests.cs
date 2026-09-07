@@ -203,7 +203,7 @@ namespace FishingMiniGame.Tests
             FishingV2FishAITuning tuning = FinalRunTuning(0.99f);
             FishingV2FishAI ai = new FishingV2FishAI(tuning, 1);
 
-            ai.Tick(0.01f, 0.1f, 2f);
+            for (int i = 0; i < 8; i++) ai.Tick(0.25f, 0.1f, 2f);
             Assert.That(ai.Current.FinalRunDecisionMade, Is.True);
             Assert.That(ai.Current.FinalRunPending, Is.True);
             Assert.That(ai.Current.IsRunTelegraphing, Is.True);
@@ -228,7 +228,7 @@ namespace FishingMiniGame.Tests
         {
             FishingV2FishAI ai = new FishingV2FishAI(FinalRunTuning(0.01f), 1);
 
-            ai.Tick(0.01f, 0.1f, 2f);
+            for (int i = 0; i < 8; i++) ai.Tick(0.25f, 0.1f, 2f);
             Assert.That(ai.Current.FinalRunDecisionMade, Is.True);
             Assert.That(ai.Current.FinalRunPending, Is.False);
             Assert.That(ai.Current.FinalRunUsed, Is.False);
@@ -245,11 +245,70 @@ namespace FishingMiniGame.Tests
             FishingV2FishAI high = new FishingV2FishAI(FinalRunTuning(0.99f), 1);
             FishingV2FishAI far = new FishingV2FishAI(FinalRunTuning(0.99f), 1);
 
-            high.Tick(0.1f, 0.8f, 2f);
-            far.Tick(0.1f, 0.1f, 8f);
+            for (int i = 0; i < 8; i++)
+            {
+                high.Tick(0.25f, 0.8f, 2f);
+                far.Tick(0.25f, 0.1f, 8f);
+            }
 
             Assert.That(high.Current.FinalRunDecisionMade, Is.False);
             Assert.That(far.Current.FinalRunDecisionMade, Is.False);
+        }
+
+        [Test]
+        public void FinalRun_DoesNotInterruptCurrentFightPhase()
+        {
+            FishingV2FishAITuning tuning = FinalRunTuning(0.99f);
+            tuning.FightMinDuration = tuning.FightMaxDuration = 1f;
+            FishingV2FishAI ai = new FishingV2FishAI(tuning, 1);
+
+            ai.Tick(0.25f, 1f, 10f);
+            ai.Tick(0.25f, 0.1f, 2f);
+            ai.Tick(0.25f, 0.1f, 2f);
+
+            Assert.That(ai.Current.FinalRunDecisionMade, Is.False);
+            Assert.That(ai.Current.FinalRunPending, Is.False);
+            Assert.That(ai.Current.IsRunTelegraphing, Is.False);
+            Assert.That(ai.Current.Behavior.State, Is.EqualTo(FishingV2BehaviorState.Fight));
+
+            ai.Tick(0.25f, 0.1f, 2f);
+
+            Assert.That(ai.Current.FinalRunDecisionMade, Is.True);
+            Assert.That(ai.Current.FinalRunPending, Is.True);
+            Assert.That(ai.Current.IsRunTelegraphing, Is.True);
+            Assert.That(ai.Current.Behavior.State, Is.EqualTo(FishingV2BehaviorState.Fight));
+        }
+
+        [Test]
+        public void NormalRun_DoesNotTransitionDirectlyIntoFinalRun()
+        {
+            FishingV2FishAITuning tuning = FinalRunTuning(0.99f);
+            tuning.FightMinDuration = tuning.FightMaxDuration = 0.1f;
+            tuning.RunMinDuration = tuning.RunMaxDuration = 0.2f;
+            tuning.RestMinDuration = tuning.RestMaxDuration = 0.1f;
+            tuning.HighFightWeight = 0f;
+            tuning.HighRunWeight = 1f;
+            tuning.HighRestWeight = 0f;
+            FishingV2FishAI ai = new FishingV2FishAI(tuning, 1);
+
+            ai.Tick(0.1f, 1f, 10f);
+            Assert.That(ai.Current.IsRunTelegraphing, Is.True);
+            ai.Tick(0.1f, 1f, 10f);
+            Assert.That(ai.Current.Behavior.State, Is.EqualTo(FishingV2BehaviorState.Run));
+
+            ai.Tick(0.22f, 0.1f, 2f);
+
+            Assert.That(ai.Current.FinalRunDecisionMade, Is.False);
+            Assert.That(ai.Current.FinalRunPending, Is.False);
+            Assert.That(ai.Current.IsRunTelegraphing, Is.False);
+            Assert.That(ai.Current.Behavior.State,
+                Is.EqualTo(FishingV2BehaviorState.Fight).Or.EqualTo(FishingV2BehaviorState.Rest));
+
+            ai.Tick(0.25f, 0.1f, 2f);
+
+            Assert.That(ai.Current.FinalRunDecisionMade, Is.True);
+            Assert.That(ai.Current.FinalRunPending, Is.True);
+            Assert.That(ai.Current.IsRunTelegraphing, Is.True);
         }
 
         [Test]
@@ -269,7 +328,7 @@ namespace FishingMiniGame.Tests
         {
             FishingV2FishAITuning tuning = FinalRunTuning(0.99f);
             FishingV2FishAI ai = new FishingV2FishAI(tuning, 1);
-            ai.Tick(0.01f, 0.1f, 2f);
+            for (int i = 0; i < 8; i++) ai.Tick(0.25f, 0.1f, 2f);
 
             ai.Reset(tuning, 1);
 

@@ -235,13 +235,6 @@ namespace FishingMiniGame.Core
 
             _headShakeCooldownRemaining = FishingMath.Max(0f, _headShakeCooldownRemaining - dt);
             UpdateHeadShake(dt);
-            EvaluateFinalRun(fishStaminaNormalized, fishDistanceMeters);
-
-            if (_finalRunPending && !_isRunTelegraphing && !_headShakeActive &&
-                _currentState != FishingV2BehaviorState.Run)
-            {
-                StartRunTelegraph(true, _staminaBand);
-            }
 
             if (_isRunTelegraphing)
             {
@@ -264,14 +257,24 @@ namespace FishingMiniGame.Core
             _phaseRemaining -= dt;
             if (_phaseRemaining <= 0f && !_headShakeActive)
             {
+                FishingV2BehaviorState completedState = _currentState;
+                bool completedFinalRun = _isFinalRun;
+                _isFinalRun = false;
+
+                // Final Run is a next-action decision, never a mid-phase interrupt.
+                // A completed normal Run must first transition through Fight or Rest.
+                if (completedState == FishingV2BehaviorState.Fight ||
+                    completedState == FishingV2BehaviorState.Rest)
+                {
+                    EvaluateFinalRun(fishStaminaNormalized, fishDistanceMeters);
+                }
+
                 if (_finalRunPending)
                 {
                     StartRunTelegraph(true, _staminaBand);
                 }
                 else
                 {
-                    bool completedFinalRun = _isFinalRun;
-                    _isFinalRun = false;
                     FishingV2BehaviorState next = SelectNextState(_staminaBand, completedFinalRun);
                     if (next == FishingV2BehaviorState.Run)
                     {
@@ -341,8 +344,8 @@ namespace FishingMiniGame.Core
             _finalRunPending = _random.NextDouble() < _tuning.FinalRunChance;
             if (!_finalRunPending) return;
 
-            // A pending final run may wait for an active shake or current run, but
-            // it still gates catch until its telegraph and run have happened.
+            // Eligibility is evaluated only at a completed Fight/Rest boundary, so
+            // a successful decision can move directly into the mandatory telegraph.
             _scheduledHeadShakeDelay = -1f;
         }
 

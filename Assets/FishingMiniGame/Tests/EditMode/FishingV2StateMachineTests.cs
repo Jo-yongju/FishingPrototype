@@ -148,8 +148,8 @@ namespace FishingMiniGame.Tests
             };
             FishingV2FishAITuning aiTuning = new FishingV2FishAITuning
             {
-                FightMinDuration = 2f,
-                FightMaxDuration = 2f,
+                FightMinDuration = 0.05f,
+                FightMaxDuration = 0.05f,
                 HeadShakeChance = 0f,
                 FinalRunChance = 0.99f,
                 FinalRunStaminaThreshold = 1f,
