@@ -46,13 +46,37 @@ Pause, disconnect, session/round not Playing, non-Fighting state, reset, abort/e
 
 ## Deferred hardware work
 
-T7 does not implement UART, packets, COM ports, current, `Iq_ref`, torque in Nm, motor direction, encoders, worker threads, or a transport scheduler. A future T9 output can replace the mock while preserving the controller contract:
+T7 does not implement the hardware paths below. It does not define UART packets, COM ports, a transport rate or timeout, motor current, torque, motor direction, encoders, worker threads, or a transport scheduler. In particular, Protocol V1 details such as `R,000–100`, 50 Hz, or a 300 ms timeout remain open for final comparison during T8/T9 integration.
+
+Future physical resistance output path:
 
 ```text
-ResistanceNormalized
-    -> UART transport
+Unity / PC
+    -> ResistanceNormalized 0.0–1.0
+    -> ESP32-S3
+    -> UART
     -> STM32G431
-    -> safe Iq_ref mapping
-    -> FOC
-    -> physical reel resistance
+    -> Safety / rate limiter
+    -> safe Resistance -> Iq_ref mapping
+    -> Sensored FOC
+    -> BLDC
+    -> physical reel crank resistance
 ```
+
+Future hardware input paths:
+
+```text
+Rod IMU / controls
+    -> ESP32-S3
+    -> Unity
+
+STM32G431 encoder telemetry
+    -> ESP32-S3
+    -> Unity ReelDelta
+```
+
+`ResistanceNormalized == 0.0` continues to mean an active-control request for no resistance, not STOP. `Stop()` remains the separate safety action used for pause, disconnect, abort, session end, and equivalent unsafe lifecycle states; it bypasses slew/ramp and requests immediate torque-off.
+
+Unity's base slew shapes the game feel of REST, FIGHT, RUN, and Final Run. The Head Shake signal remains a fast pulse overlay applied after that base slew. A separate STM32G431 rate limiter will be defined during real hardware integration as a safety limiter and tuned on the physical system so that it does not excessively flatten the Head Shake overlay.
+
+Actual `Iq` in amperes, torque in N·m, and `IQ_MAX_SAFE` are not fixed by T7. They must be measured and selected after STM32G431 hardware bring-up.
