@@ -14,6 +14,8 @@ namespace FishingMiniGame.Runtime
 
         private IFishingInputSource _inputSource;
         private IFishingFeedbackOutput _feedbackOutput;
+        private IFishingResistanceOutput _resistanceOutput;
+        private FishingV2ResistanceMapper _resistanceMapper;
         private LocalFishingAuthority _authority;
         private FishingRoundTracker _roundTracker;
         private SingleFishSessionTracker _sessionTracker;
@@ -38,6 +40,8 @@ namespace FishingMiniGame.Runtime
         public FishingSessionSnapshot SessionSnapshot => _sessionTracker?.Current;
         public FishingSessionResult LastSessionResult => _sessionTracker?.Result;
         public FishingInputFrame LastInputFrame { get; private set; }
+        public FishingResistanceCommand LastResistanceCommand { get; private set; } = FishingResistanceCommand.Zero;
+        public bool IsResistanceStopped { get; private set; } = true;
         public IReadOnlyList<FishingCatchRecord> CatchHistory => _roundTracker?.Catches;
         public FishingFeedbackFrame LastFeedback => _feedbackOutput is MockFishingFeedbackOutput mock
             ? mock.LastFrame
@@ -77,6 +81,7 @@ namespace FishingMiniGame.Runtime
         private void OnDisable()
         {
             _feedbackOutput?.StopFeedback();
+            StopResistanceFeedback(Snapshot);
         }
 
         private void OnDestroy()
@@ -85,6 +90,7 @@ namespace FishingMiniGame.Runtime
             if (_roundTracker != null) _roundTracker.Completed -= OnRoundFinished;
             if (_sessionTracker != null) _sessionTracker.Completed -= OnSessionFinished;
             _feedbackOutput?.StopFeedback();
+            StopResistanceFeedback(Snapshot);
         }
 
         public void Configure(FishingGameConfigAsset gameConfig, bool shouldAutoStart)
@@ -109,9 +115,14 @@ namespace FishingMiniGame.Runtime
             if (_roundTracker != null) _roundTracker.Completed -= OnRoundFinished;
             if (_sessionTracker != null) _sessionTracker.Completed -= OnSessionFinished;
             _feedbackOutput?.StopFeedback();
+            StopResistanceFeedback(Snapshot);
 
             _inputSource = new KeyboardFishingInputSource("local-player");
             _feedbackOutput = new MockFishingFeedbackOutput();
+            _resistanceMapper = new FishingV2ResistanceMapper();
+            _resistanceOutput = new MockFishingResistanceOutput();
+            LastResistanceCommand = FishingResistanceCommand.Zero;
+            IsResistanceStopped = true;
             _authority = new LocalFishingAuthority();
             _authority.CycleFinished += OnCycleFinished;
             _roundTracker = new FishingRoundTracker();
@@ -157,6 +168,7 @@ namespace FishingMiniGame.Runtime
             if (!HasRuntimeDependencies()) return;
             if (_gameMode == FishingGameMode.SingleFishSession) _sessionTracker.Abort();
             else _roundTracker.Stop();
+            StopResistanceFeedback(Snapshot);
         }
 
         public void AbortRound()
@@ -164,12 +176,17 @@ namespace FishingMiniGame.Runtime
             if (!HasRuntimeDependencies()) return;
             if (_gameMode == FishingGameMode.SingleFishSession) _sessionTracker.Abort();
             else _roundTracker.Abort();
+            StopResistanceFeedback(Snapshot);
         }
 
         public void SetPaused(bool paused)
         {
             _paused = paused;
-            if (paused) _feedbackOutput?.StopFeedback();
+            if (paused)
+            {
+                _feedbackOutput?.StopFeedback();
+                StopResistanceFeedback(Snapshot);
+            }
         }
 
         public void SetInputSource(IFishingInputSource inputSource)
@@ -177,6 +194,7 @@ namespace FishingMiniGame.Runtime
             _inputSource = inputSource ?? throw new ArgumentNullException(nameof(inputSource));
             _inputSource.ResetState();
             LastInputFrame = NeutralInputFrame();
+            StopResistanceFeedback(Snapshot);
         }
 
         public void SetFeedbackOutput(IFishingFeedbackOutput feedbackOutput)
@@ -185,8 +203,19 @@ namespace FishingMiniGame.Runtime
             _feedbackOutput = feedbackOutput ?? throw new ArgumentNullException(nameof(feedbackOutput));
         }
 
+        public void SetResistanceOutput(IFishingResistanceOutput resistanceOutput)
+        {
+            if (resistanceOutput == null) throw new ArgumentNullException(nameof(resistanceOutput));
+            StopResistanceFeedback(Snapshot);
+            _resistanceOutput = resistanceOutput;
+            LastResistanceCommand = FishingResistanceCommand.Zero;
+            IsResistanceStopped = true;
+            _resistanceOutput.Stop();
+        }
+
         public void ResetCycle()
         {
+            StopResistanceFeedback(Snapshot);
             if (!IsActivePlayFlow()) return;
             _inputSource?.ResetState();
             _authority?.ResetCycle();
@@ -201,6 +230,7 @@ namespace FishingMiniGame.Runtime
             _roundTracker.Tick(deltaTime);
             if (_roundTracker.Current.State != FishingRoundState.Playing)
             {
+                StopResistanceFeedback(Snapshot);
                 if (_roundTracker.Current.State == FishingRoundState.Completed ||
                     _roundTracker.Current.State == FishingRoundState.Aborted)
                 {
@@ -218,6 +248,7 @@ namespace FishingMiniGame.Runtime
             _sessionTracker.Tick(deltaTime);
             if (_sessionTracker.Current.State != FishingSessionState.Playing)
             {
+                StopResistanceFeedback(Snapshot);
                 if (_sessionTracker.Current.State == FishingSessionState.Completed ||
                     _sessionTracker.Current.State == FishingSessionState.Aborted)
                 {
@@ -250,12 +281,14 @@ namespace FishingMiniGame.Runtime
             LastInputFrame = _inputSource.ReadFrame();
             _authority.Tick(LastInputFrame, deltaTime);
             _feedbackOutput.ApplyFeedback(_authority.Current.Feedback);
+            UpdateResistanceFeedback(deltaTime);
             LogStateTransitionIfNeeded();
         }
 
         private bool HasRuntimeDependencies()
         {
             return _initialized && _inputSource != null && _feedbackOutput != null &&
+                _resistanceOutput != null && _resistanceMapper != null &&
                 _authority != null && _roundTracker != null && _sessionTracker != null &&
                 _fishCatalog != null;
         }
@@ -271,6 +304,7 @@ namespace FishingMiniGame.Runtime
 
         private void RebuildRound(FishingLaunchContext context)
         {
+            StopResistanceFeedback(Snapshot);
             _launchContext = (context ?? new FishingLaunchContext()).Copy();
             _launchContext.Sanitize();
             _gameMode = _modeOverride ?? (config != null ? config.GameMode : FishingGameMode.LegacyRound);
@@ -321,6 +355,7 @@ namespace FishingMiniGame.Runtime
             _inputSource.ResetState();
             LastInputFrame = NeutralInputFrame();
             _feedbackOutput.StopFeedback();
+            StopResistanceFeedback(_authority.Current);
             _lastLoggedState = _authority.Current.State;
         }
 
@@ -380,6 +415,7 @@ namespace FishingMiniGame.Runtime
         private void OnRoundFinished(FishingRoundResult result)
         {
             _feedbackOutput?.StopFeedback();
+            StopResistanceFeedback(Snapshot);
             RoundFinished?.Invoke(result);
             if (logStateChanges)
             {
@@ -390,6 +426,7 @@ namespace FishingMiniGame.Runtime
         private void OnSessionFinished(FishingSessionResult result)
         {
             _feedbackOutput?.StopFeedback();
+            StopResistanceFeedback(Snapshot);
             SessionFinished?.Invoke(result);
             if (logStateChanges)
             {
@@ -402,6 +439,39 @@ namespace FishingMiniGame.Runtime
             if (!logStateChanges || _authority.Current.State == _lastLoggedState) return;
             _lastLoggedState = _authority.Current.State;
             Debug.Log($"[Fishing] State -> {_lastLoggedState}", this);
+        }
+
+        private void UpdateResistanceFeedback(float deltaTime)
+        {
+            FishingSnapshot snapshot = Snapshot;
+            if (!CanApplyResistance(snapshot))
+            {
+                StopResistanceFeedback(snapshot);
+                return;
+            }
+
+            FishingResistanceCommand command = _resistanceMapper.Tick(snapshot, deltaTime);
+            LastResistanceCommand = command;
+            IsResistanceStopped = false;
+            _resistanceOutput.ApplyCommand(command);
+        }
+
+        private bool CanApplyResistance(FishingSnapshot snapshot)
+        {
+            return _gameMode == FishingGameMode.SingleFishSession &&
+                _sessionTracker?.Current.State == FishingSessionState.Playing &&
+                snapshot != null &&
+                snapshot.State == FishingPlayerState.Fighting &&
+                !_paused &&
+                LastInputFrame.IsDeviceConnected;
+        }
+
+        private void StopResistanceFeedback(FishingSnapshot snapshot)
+        {
+            _resistanceMapper?.ResetToSafe(snapshot);
+            LastResistanceCommand = FishingResistanceCommand.Zero;
+            IsResistanceStopped = true;
+            _resistanceOutput?.Stop();
         }
 
         private FishingInputFrame NeutralInputFrame()
