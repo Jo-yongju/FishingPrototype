@@ -19,6 +19,7 @@ namespace FishingMiniGame.Runtime
 
         [SerializeField] private FishingGameController controller;
         [SerializeField] private bool allowLocalStart;
+        [SerializeField, Min(0f)] private float caughtPresentationHoldSeconds = 1.25f;
 
         private Font _font;
         private GameObject _canvasRoot;
@@ -61,6 +62,8 @@ namespace FishingMiniGame.Runtime
         private bool _debugVisible;
         private bool _lastNibbling;
         private bool _lastRunTelegraphing;
+        private bool _caughtPresentationStarted;
+        private float _caughtPresentationRemainingSeconds;
         private bool _built;
         private FishingStandaloneBootstrap _standaloneBootstrap;
 
@@ -118,11 +121,12 @@ namespace FishingMiniGame.Runtime
             bool playing = singleSession
                 ? session.State == FishingSessionState.Playing
                 : round.State == FishingRoundState.Playing;
+            bool caughtPresentation = UpdateCaughtPresentation(snapshot, singleSession, finished);
 
             _startPanel.SetActive(ready);
             _countdownPanel.SetActive(countdown);
-            _resultPanel.SetActive(finished);
-            _gameplayRoot.SetActive(playing);
+            _resultPanel.SetActive(finished && !caughtPresentation);
+            _gameplayRoot.SetActive(playing || caughtPresentation);
             _debugPanel.SetActive(_debugVisible && playing);
 
             if (ready)
@@ -149,14 +153,14 @@ namespace FishingMiniGame.Runtime
                 return;
             }
 
-            if (finished)
+            if (finished && !caughtPresentation)
             {
                 if (singleSession) RefreshSessionResult(session);
                 else RefreshResult(round);
                 return;
             }
 
-            if (!playing) return;
+            if (!playing && !caughtPresentation) return;
 
             _timerLabelText.text = singleSession ? "SESSION ELAPSED" : "TIME LEFT";
             _timerText.text = FormatTime(singleSession ? session.ElapsedSeconds : round.RemainingSeconds);
@@ -196,6 +200,36 @@ namespace FishingMiniGame.Runtime
             UpdateAlert(snapshot, singleSession);
             UpdateRecentCatch(singleSession, session);
             UpdateDebug(snapshot, round, session);
+        }
+
+        private bool UpdateCaughtPresentation(
+            FishingSnapshot snapshot,
+            bool singleSession,
+            bool finished)
+        {
+            bool caught = singleSession && finished &&
+                snapshot.State == FishingPlayerState.Caught;
+            if (!caught)
+            {
+                _caughtPresentationStarted = false;
+                _caughtPresentationRemainingSeconds = 0f;
+                return false;
+            }
+
+            if (!_caughtPresentationStarted)
+            {
+                _caughtPresentationStarted = true;
+                _caughtPresentationRemainingSeconds = Mathf.Max(0f, caughtPresentationHoldSeconds);
+            }
+
+            bool active = _caughtPresentationRemainingSeconds > 0f;
+            if (active && !controller.IsPaused)
+            {
+                _caughtPresentationRemainingSeconds = Mathf.Max(
+                    0f,
+                    _caughtPresentationRemainingSeconds - Time.unscaledDeltaTime);
+            }
+            return active;
         }
 
         private void UpdateGuidance(FishingSnapshot snapshot, bool singleSession)
